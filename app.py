@@ -149,6 +149,19 @@ app.layout = dbc.Container(
                                     label="Performance Heatmap",
                                     tab_id="tab-5",
                                 ),
+                                dbc.Tab(
+                                    [
+                                        dbc.Label("Held filtern (optional):"),
+                                        dcc.Dropdown(
+                                            id="hero-filter-dropdown",
+                                            placeholder="Kein Held ausgewählt",
+                                            className="mb-3",
+                                        ),
+                                        dcc.Graph(id="winrate-over-time"),
+                                    ],
+                                    label="Winrate Verlauf",
+                                    tab_id="tab-6",
+                                ),
                             ],
                             id="tabs",
                             active_tab="tab-1",
@@ -286,6 +299,8 @@ def toggle_slider(tab):
         Output("plays-hero-graph", "figure"),
         Output("performance-heatmap", "figure"),
         Output("stats-container", "children"),
+        Output("winrate-over-time", "figure"),
+        Output("hero-filter-dropdown", "options"),
     ],
     [
         Input("player-dropdown", "value"),
@@ -293,9 +308,11 @@ def toggle_slider(tab):
         Input("season-dropdown", "value"),
         Input("month-dropdown", "value"),
         Input("year-dropdown", "value"),
+        Input("hero-filter-dropdown", "value"),
     ],
 )
-def update_all_graphs(player, min_games, season, month, year):
+def update_all_graphs(player, min_games, season, month, year, hero_filter):
+
     temp = filter_data(player, season, month, year)
     data_all = filter_data("all", season, month, year)
 
@@ -403,6 +420,44 @@ def update_all_graphs(player, min_games, season, month, year):
             margin=dict(l=40, r=20, t=60, b=40),
         )
 
+    # === Dropdown-Optionen für Held ===
+    hero_options = [
+        {"label": h, "value": h} for h in sorted(temp["Hero"].dropna().unique())
+    ]
+
+    # === Zeitlicher Verlauf der Winrate ===
+    winrate_fig = px.line(title="Keine Daten verfügbar")
+
+    if not temp.empty:
+        time_data = temp.copy()
+
+        if hero_filter:  # Nur den gewählten Held
+            time_data = time_data[time_data["Hero"] == hero_filter]
+
+        if not time_data.empty:
+            # Datum aufsteigend sortieren
+            time_data = time_data.sort_values("Datum").reset_index(drop=True)
+
+            # Umwandlung Win → 1, Lose → 0
+            time_data["WinBinary"] = (time_data["Win Lose"] == "Win").astype(int)
+
+            # Kumulative Winrate berechnen
+            time_data["GameNumber"] = range(1, len(time_data) + 1)
+            time_data["CumulativeWins"] = time_data["WinBinary"].cumsum()
+            time_data["CumulativeWinrate"] = (
+                time_data["CumulativeWins"] / time_data["GameNumber"]
+            )
+
+            winrate_fig = px.line(
+                time_data,
+                x="GameNumber",
+                y="CumulativeWinrate",
+                title=f"Winrate-Verlauf ({'Held: ' + hero_filter if hero_filter else player})",
+            )
+            winrate_fig.update_layout(
+                yaxis_tickformat=".0%", yaxis_title="Winrate", xaxis_title="Spielnummer"
+            )
+
     if not data_all.empty:
         # === Corrected total game count ===
 
@@ -453,7 +508,16 @@ def update_all_graphs(player, min_games, season, month, year):
             ],
             className="mb-2",
         )
-    return map_fig, hero_fig, role_fig, plays_fig, heatmap_fig, stats
+    return (
+        map_fig,
+        hero_fig,
+        role_fig,
+        plays_fig,
+        heatmap_fig,
+        stats,
+        winrate_fig,
+        hero_options,
+    )
 
 
 if __name__ == "__main__":
