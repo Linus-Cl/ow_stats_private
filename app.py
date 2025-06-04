@@ -2,13 +2,22 @@ import pandas as pd
 import plotly.express as px
 from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
+import requests
 
-# load and clean data | init app
-df = pd.read_excel("OW_Win_Stats.xlsx", sheet_name="Daten")
+url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
+response = requests.get(url)
+
+with open("local.xlsx", "wb") as f:
+    f.write(response.content)
+
+df = pd.read_excel("local.xlsx", sheet_name="Daten")
+
 df.columns = df.columns.str.strip()
+
+# Initialize app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# layout
+# Layout
 app.layout = dbc.Container(
     [
         html.H1("Overwatch Match-Analyse", className="my-4 text-center"),
@@ -43,10 +52,19 @@ app.layout = dbc.Container(
                                         dcc.Slider(
                                             id="min-games-slider",
                                             min=1,
-                                            max=10,
-                                            step=1,
-                                            value=3,
-                                            marks={i: str(i) for i in range(1, 11)},
+                                            max=100,
+                                            step=None,
+                                            value=25,
+                                            marks={
+                                                1: "1",
+                                                5: "5",
+                                                10: "10",
+                                                25: "25",
+                                                50: "50",
+                                                75: "75",
+                                                100: "100",
+                                            },
+                                            included=False,
                                             className="mb-3",
                                         ),
                                     ]
@@ -108,20 +126,19 @@ app.layout = dbc.Container(
 )
 
 
-# helperfunctions
-def filter_data(player, min_games=1):
+def filter_data(player):
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
 
     if player != "all":
         role_col = f"{player} Rolle"
         hero_col = f"{player} Hero"
 
-        # check if played
+        # Filter for player participation
         temp = temp[temp[role_col].notna() & (temp[role_col] != "nicht dabei")]
-        temp["Hero"] = temp[hero_col]
-        temp["Rolle"] = temp[role_col]
+        temp["Hero"] = temp[hero_col].str.strip()
+        temp["Rolle"] = temp[role_col].str.strip()
     else:
-        # 'all players' case
+        # Combine data for all players
         hero_data = []
 
         for p in ["Steven", "Phil", "Bobo"]:
@@ -131,26 +148,32 @@ def filter_data(player, min_games=1):
             player_matches = temp[
                 temp[role_col].notna() & (temp[role_col] != "nicht dabei")
             ].copy()
+
             if not player_matches.empty:
-                player_matches["Hero"] = player_matches[hero_col]
-                player_matches["Rolle"] = player_matches[role_col]
+                player_matches["Hero"] = player_matches[hero_col].str.strip()
+                player_matches["Rolle"] = player_matches[role_col].str.strip()
                 player_matches["Spieler"] = p
                 hero_data.append(player_matches)
 
-        if hero_data:
-            temp = pd.concat(hero_data)
-        else:
-            temp = pd.DataFrame(
-                columns=temp.columns.tolist() + ["Hero", "Rolle", "Spieler"]
-            )
+        temp = pd.concat(hero_data) if hero_data else pd.DataFrame()
+
+    # Clean data
+    if not temp.empty:
+        temp = temp[temp["Hero"].notna()]
+        temp = temp[temp["Hero"] != ""]
 
     return temp
 
 
 def calculate_winrate(data, group_col):
-    if group_col not in data.columns:
+    if data.empty or group_col not in data.columns:
         return pd.DataFrame(columns=[group_col, "Win", "Lose", "Winrate", "Spiele"])
 
+    # Clean group column
+    data[group_col] = data[group_col].str.strip()
+    data = data[data[group_col].notna()]
+    data = data[data[group_col] != ""]
+
     grouped = data.groupby([group_col, "Win Lose"]).size().reset_index(name="Anzahl")
     pivot = grouped.pivot(index=group_col, columns="Win Lose", values="Anzahl").fillna(
         0
@@ -162,19 +185,6 @@ def calculate_winrate(data, group_col):
     return pivot.sort_values("Winrate", ascending=False)
 
 
-def calculate_winrate(data, group_col):
-    grouped = data.groupby([group_col, "Win Lose"]).size().reset_index(name="Anzahl")
-    pivot = grouped.pivot(index=group_col, columns="Win Lose", values="Anzahl").fillna(
-        0
-    )
-    pivot["Winrate"] = pivot["Win"] / (pivot["Win"] + pivot["Lose"])
-    pivot["Spiele"] = pivot["Win"] + pivot["Lose"]
-    pivot = pivot.reset_index()
-
-    return pivot.sort_values("Winrate", ascending=False)
-
-
-# Callbacks
 @app.callback(
     [
         Output("winrate-map-graph", "figure"),
@@ -187,49 +197,59 @@ def calculate_winrate(data, group_col):
 def update_all_graphs(player, min_games):
     temp = filter_data(player)
 
-    # map winrate
-    map_data = calculate_winrate(temp, "Map")
-    map_fig = px.bar(
-        map_data,
-        x="Map",
-        y="Winrate",
-        title=f"Winrate nach Map ({player if player != 'all' else 'Alle Spieler'})",
-        hover_data=["Spiele"],
-    )
-    map_fig.update_layout(yaxis_tickformat=".0%")
+    # Initialize empty figures in case of no data
+    map_fig = px.bar(title="Keine Map-Daten verfügbar")
+    hero_fig = px.bar(title="Keine Held-Daten verfügbar")
+    role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
+    stats = html.Div("Keine Daten verfügbar")
 
-    # hero winrate
-    hero_data = calculate_winrate(temp, "Hero")
-    hero_data = hero_data[hero_data["Spiele"] >= min_games]
-    hero_fig = px.bar(
-        hero_data,
-        x="Hero",
-        y="Winrate",
-        title=f"Winrate nach Held (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-        hover_data=["Spiele"],
-        color="Winrate",
-        color_continuous_scale="RdYlGn",
-        range_color=[0, 1],
-    )
-    hero_fig.update_layout(yaxis_tickformat=".0%")
+    if not temp.empty:
+        # Map Winrate
+        map_data = calculate_winrate(temp, "Map")
+        if not map_data.empty:
+            map_fig = px.bar(
+                map_data,
+                x="Map",
+                y="Winrate",
+                title=f"Winrate nach Map ({player if player != 'all' else 'Alle Spieler'})",
+                hover_data=["Spiele"],
+            )
+            map_fig.update_layout(yaxis_tickformat=".0%")
 
-    # role winrate
-    role_data = calculate_winrate(temp, "Rolle")
-    role_fig = px.bar(
-        role_data,
-        x="Rolle",
-        y="Winrate",
-        title=f"Winrate nach Rolle ({player if player != 'all' else 'Alle Spieler'})",
-        hover_data=["Spiele"],
-    )
-    role_fig.update_layout(yaxis_tickformat=".0%")
+        # Hero Winrate
+        hero_data = calculate_winrate(temp, "Hero")
+        hero_data = hero_data[hero_data["Spiele"] >= min_games]
+        if not hero_data.empty:
+            hero_fig = px.bar(
+                hero_data,
+                x="Hero",
+                y="Winrate",
+                title=f"Winrate nach Held (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                hover_data=["Spiele"],
+                color="Winrate",
+                color_continuous_scale="RdYlGn",
+                range_color=[0, 1],
+            )
+            hero_fig.update_layout(yaxis_tickformat=".0%")
 
-    total_games = len(temp)
-    wins = len(temp[temp["Win Lose"] == "Win"])
-    winrate = wins / total_games if total_games > 0 else 0
+        # Role Winrate
+        role_data = calculate_winrate(temp, "Rolle")
+        if not role_data.empty:
+            role_fig = px.bar(
+                role_data,
+                x="Rolle",
+                y="Winrate",
+                title=f"Winrate nach Rolle ({player if player != 'all' else 'Alle Spieler'})",
+                hover_data=["Spiele"],
+            )
+            role_fig.update_layout(yaxis_tickformat=".0%")
 
-    stats = [
-        dbc.Row(
+        # Statistics
+        total_games = len(temp)
+        wins = len(temp[temp["Win Lose"] == "Win"])
+        winrate = wins / total_games if total_games > 0 else 0
+
+        stats = dbc.Row(
             [
                 dbc.Col(
                     dbc.Card(
@@ -270,10 +290,9 @@ def update_all_graphs(player, min_games):
             ],
             className="mb-2",
         )
-    ]
 
     return map_fig, hero_fig, role_fig, stats
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
