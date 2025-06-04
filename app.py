@@ -63,7 +63,12 @@ app.layout = dbc.Container(
                                                 100: "100",
                                             },
                                             included=False,
-                                            className="mb-3",
+                                            className="mb-1",
+                                        ),
+                                        html.Div(
+                                            id="slider-hint",
+                                            className="text-muted",
+                                            style={"fontSize": "0.85em"},
                                         ),
                                         dbc.Label("Season auswählen:"),
                                         dcc.Dropdown(
@@ -138,6 +143,11 @@ app.layout = dbc.Container(
                                     dcc.Graph(id="plays-hero-graph"),
                                     label="Spiele pro Held",
                                     tab_id="tab-4",
+                                ),
+                                dbc.Tab(
+                                    dcc.Graph(id="performance-heatmap"),
+                                    label="Performance Heatmap",
+                                    tab_id="tab-5",
                                 ),
                             ],
                             id="tabs",
@@ -257,11 +267,24 @@ def sync_time_filters(season, month, year):
 
 
 @app.callback(
+    Output("min-games-slider", "disabled"),
+    Output("slider-hint", "children"),
+    Input("tabs", "active_tab"),
+)
+def toggle_slider(tab):
+    if tab == "tab-2":  # Held-Winrate
+        return False, ""
+    else:
+        return True, "Nur relevant für 'Winrate nach Held'."
+
+
+@app.callback(
     [
         Output("winrate-map-graph", "figure"),
         Output("winrate-hero-graph", "figure"),
         Output("winrate-role-graph", "figure"),
         Output("plays-hero-graph", "figure"),
+        Output("performance-heatmap", "figure"),
         Output("stats-container", "children"),
     ],
     [
@@ -351,6 +374,35 @@ def update_all_graphs(player, min_games, season, month, year):
                 title=f"Spiele pro Held ({'Alle Spieler' if player=='all' else player})",
             )
             plays_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
+
+        # === Performance Heatmap: Hero × Map Winrate ===
+
+        heatmap_fig = px.imshow([[0]], title="Keine Daten verfügbar")  # Fallback
+
+        if not temp.empty:
+            pivot = temp.pivot_table(
+                index="Rolle",
+                columns="Map",
+                values="Win Lose",
+                aggfunc=lambda x: (x == "Win").sum() / len(x),
+            ).fillna(0)
+
+    if not pivot.empty:
+        heatmap_fig = px.imshow(
+            pivot,
+            text_auto=".0%",
+            color_continuous_scale="RdYlGn",
+            zmin=0,
+            zmax=1,
+            aspect="auto",
+            title=f"Winrate Heatmap – {player if player != 'all' else 'Alle Spieler'}",
+        )
+        heatmap_fig.update_layout(
+            xaxis_title="Map",
+            yaxis_title="Rolle",
+            margin=dict(l=40, r=20, t=60, b=40),
+        )
+
     if not data_all.empty:
         # === Corrected total game count ===
 
@@ -401,7 +453,7 @@ def update_all_graphs(player, min_games, season, month, year):
             ],
             className="mb-2",
         )
-    return map_fig, hero_fig, role_fig, plays_fig, stats
+    return map_fig, hero_fig, role_fig, plays_fig, heatmap_fig, stats
 
 
 if __name__ == "__main__":
