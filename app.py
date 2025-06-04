@@ -134,6 +134,11 @@ app.layout = dbc.Container(
                                     label="Winrate nach Rolle",
                                     tab_id="tab-3",
                                 ),
+                                dbc.Tab(
+                                    dcc.Graph(id="plays-hero-graph"),
+                                    label="Spiele pro Held",
+                                    tab_id="tab-4",
+                                ),
                             ],
                             id="tabs",
                             active_tab="tab-1",
@@ -256,6 +261,7 @@ def sync_time_filters(season, month, year):
         Output("winrate-map-graph", "figure"),
         Output("winrate-hero-graph", "figure"),
         Output("winrate-role-graph", "figure"),
+        Output("plays-hero-graph", "figure"),
         Output("stats-container", "children"),
     ],
     [
@@ -273,6 +279,7 @@ def update_all_graphs(player, min_games, season, month, year):
     map_fig = px.bar(title="Keine Map-Daten verfügbar")
     hero_fig = px.bar(title="Keine Held-Daten verfügbar")
     role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
+    plays_fig = px.bar(title="Keine Held-Spieldaten verfügbar")
     stats = html.Div("Keine Daten verfügbar")
 
     if not temp.empty:
@@ -327,7 +334,23 @@ def update_all_graphs(player, min_games, season, month, year):
                 hover_data=["Spiele"],
             )
             role_fig.update_layout(yaxis_tickformat=".0%")
+        # === NEU: Spiele-pro-Held ===
+        hero_counts = (
+            temp.groupby("Hero")
+            .size()
+            .reset_index(name="Spiele")
+            .sort_values("Spiele", ascending=False)
+        )
 
+        if not hero_counts.empty:
+            plays_fig = px.bar(
+                hero_counts,
+                x="Hero",
+                y="Spiele",
+                text="Spiele",
+                title=f"Spiele pro Held ({'Alle Spieler' if player=='all' else player})",
+            )
+            plays_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
     if not data_all.empty:
         # === Corrected total game count ===
 
@@ -378,7 +401,7 @@ def update_all_graphs(player, min_games, season, month, year):
             ],
             className="mb-2",
         )
-    return map_fig, hero_fig, role_fig, stats
+    return map_fig, hero_fig, role_fig, plays_fig, stats
 
 
 if __name__ == "__main__":
