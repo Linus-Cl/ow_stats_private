@@ -4,11 +4,12 @@ from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
 import requests
 
-url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
-response = requests.get(url)
+# load excel sheet from url
+# url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
+# response = requests.get(url)
 
-with open("local.xlsx", "wb") as f:
-    f.write(response.content)
+# with open("local.xlsx", "wb") as f:
+#     f.write(response.content)
 
 df = pd.read_excel("local.xlsx", sheet_name="Daten")
 
@@ -20,7 +21,7 @@ app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 # Layout
 app.layout = dbc.Container(
     [
-        html.H1("Overwatch Match-Analyse", className="my-4 text-center"),
+        html.H1("Overwatch Statistics", className="my-4 text-center"),
         dbc.Row(
             [
                 dbc.Col(
@@ -36,15 +37,11 @@ app.layout = dbc.Container(
                                         dcc.Dropdown(
                                             id="player-dropdown",
                                             options=[
-                                                {
-                                                    "label": "Alle Spieler",
-                                                    "value": "all",
-                                                },
                                                 {"label": "Steven", "value": "Steven"},
                                                 {"label": "Phil", "value": "Phil"},
                                                 {"label": "Bobo", "value": "Bobo"},
                                             ],
-                                            value="all",
+                                            value="Steven",
                                             clearable=False,
                                             className="mb-3",
                                         ),
@@ -110,7 +107,8 @@ app.layout = dbc.Container(
                         dbc.Card(
                             [
                                 dbc.CardHeader(
-                                    "Statistiken", className="bg-primary text-white"
+                                    "Gesamtstatistiken",
+                                    className="bg-primary text-white",
                                 ),
                                 dbc.CardBody([html.Div(id="stats-container")]),
                             ]
@@ -196,15 +194,27 @@ def calculate_winrate(data, group_col):
 )
 def update_all_graphs(player, min_games):
     temp = filter_data(player)
+    data_all = filter_data("all")
 
-    # Initialize empty figures in case of no data
     map_fig = px.bar(title="Keine Map-Daten verfügbar")
     hero_fig = px.bar(title="Keine Held-Daten verfügbar")
     role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
     stats = html.Div("Keine Daten verfügbar")
 
     if not temp.empty:
-        # Map Winrate
+        # === Corrected total game count ===
+        if player == "all":
+            # Use unique matches (e.g., by "Datum" and "Map" combination)
+            unique_games = temp[["Datum", "Map"]].drop_duplicates()
+        else:
+            # Each row is already a unique match for the player
+            unique_games = temp
+
+        total_games = unique_games.shape[0]
+        wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
+        winrate = wins / total_games if total_games > 0 else 0
+
+        # === Map Winrate ===
         map_data = calculate_winrate(temp, "Map")
         if not map_data.empty:
             map_fig = px.bar(
@@ -216,7 +226,7 @@ def update_all_graphs(player, min_games):
             )
             map_fig.update_layout(yaxis_tickformat=".0%")
 
-        # Hero Winrate
+        # === Hero Winrate ===
         hero_data = calculate_winrate(temp, "Hero")
         hero_data = hero_data[hero_data["Spiele"] >= min_games]
         if not hero_data.empty:
@@ -232,7 +242,7 @@ def update_all_graphs(player, min_games):
             )
             hero_fig.update_layout(yaxis_tickformat=".0%")
 
-        # Role Winrate
+        # === Role Winrate ===
         role_data = calculate_winrate(temp, "Rolle")
         if not role_data.empty:
             role_fig = px.bar(
@@ -244,11 +254,15 @@ def update_all_graphs(player, min_games):
             )
             role_fig.update_layout(yaxis_tickformat=".0%")
 
-        # Statistics
-        total_games = len(temp)
-        wins = len(temp[temp["Win Lose"] == "Win"])
-        winrate = wins / total_games if total_games > 0 else 0
+    if not data_all.empty:
+        # === Corrected total game count ===
 
+        unique_games = data_all[["Datum", "Map"]].drop_duplicates()
+
+        unique_games = data_all.drop_duplicates(subset=["Datum", "Map"])
+        total_games = unique_games.shape[0]
+        wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
+        # === Statistics ===
         stats = dbc.Row(
             [
                 dbc.Col(
@@ -290,7 +304,6 @@ def update_all_graphs(player, min_games):
             ],
             className="mb-2",
         )
-
     return map_fig, hero_fig, role_fig, stats
 
 
