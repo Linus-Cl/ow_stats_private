@@ -6,9 +6,10 @@ import requests
 from dash import ctx
 import os
 
+
 # Initialize app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-
+server = app.server  # Expose Flask server for hosting
 # Global variable to store the dataframe
 df = pd.DataFrame()
 
