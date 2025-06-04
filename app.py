@@ -1,28 +1,71 @@
 import pandas as pd
 import plotly.express as px
-from dash import Dash, dcc, html, Input, Output
+from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 import requests
 from dash import ctx
-
-# load excel sheet from url
-# url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
-# response = requests.get(url)
-
-# with open("local.xlsx", "wb") as f:
-#     f.write(response.content)
-
-df = pd.read_excel("local.xlsx", sheet_name="Daten")
-
-df.columns = df.columns.str.strip()
+import os
 
 # Initialize app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# Global variable to store the dataframe
+df = pd.DataFrame()
+
+
+def load_data(use_local=True):
+    global df
+    if use_local:
+        try:
+            df = pd.read_excel("local.xlsx", sheet_name="Daten")
+            print("Loaded data from local.xlsx")
+        except Exception as e:
+            print(f"Error loading local file: {e}")
+            df = pd.DataFrame()
+    else:
+        try:
+            url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
+            response = requests.get(url)
+            response.raise_for_status()  # Raise an error for bad status codes
+
+            with open("local.xlsx", "wb") as f:
+                f.write(response.content)
+
+            df = pd.read_excel("local.xlsx", sheet_name="Daten")
+            print("Successfully downloaded and loaded data from URL")
+        except Exception as e:
+            print(f"Error downloading data: {e}")
+            # Fall back to local file if download fails
+            try:
+                df = pd.read_excel("local.xlsx", sheet_name="Daten")
+                print("Fell back to local.xlsx after download failed")
+            except Exception as e:
+                print(f"Error loading local file: {e}")
+                df = pd.DataFrame()
+
+    if not df.empty:
+        df.columns = df.columns.str.strip()
+
+
+# Load local data by default when starting
+load_data(use_local=True)
 
 # Layout
 app.layout = dbc.Container(
     [
         html.H1("Overwatch Statistics", className="my-4 text-center"),
+        dbc.Row(
+            dbc.Col(
+                dbc.Button(
+                    "Update Data from Cloud",
+                    id="update-data-button",
+                    color="primary",
+                    className="mb-3",
+                    n_clicks=0,
+                ),
+                width={"size": 3, "offset": 9},
+            )
+        ),
         dbc.Row(
             [
                 dbc.Col(
@@ -190,12 +233,17 @@ app.layout = dbc.Container(
             ],
             className="mt-4",
         ),
+        dcc.Store(id="data-store"),  # Store component to trigger callbacks
+        html.Div(
+            id="dummy-output", style={"display": "none"}
+        ),  # Hidden div for callback output
     ],
     fluid=True,
 )
 
 
 def filter_data(player, season=None, month=None, year=None):
+    global df
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
 
     # Priorität: Season hat Vorrang
@@ -267,14 +315,11 @@ def calculate_winrate(data, group_col):
     Input("year-dropdown", "value"),
 )
 def sync_time_filters(season, month, year):
-
     triggered = ctx.triggered_id
 
     if triggered == "season-dropdown" and season:
-
         return season, None, None
     elif triggered in ["month-dropdown", "year-dropdown"] and (month or year):
-
         return None, month, year
     return season, month, year
 
@@ -292,6 +337,17 @@ def toggle_slider(tab):
 
 
 @app.callback(
+    Output("dummy-output", "children"),
+    Input("update-data-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def update_data(n_clicks):
+    if n_clicks > 0:
+        load_data(use_local=False)
+    return ""
+
+
+@app.callback(
     [
         Output("winrate-map-graph", "figure"),
         Output("winrate-hero-graph", "figure"),
@@ -301,6 +357,9 @@ def toggle_slider(tab):
         Output("stats-container", "children"),
         Output("winrate-over-time", "figure"),
         Output("hero-filter-dropdown", "options"),
+        Output("season-dropdown", "options"),
+        Output("month-dropdown", "options"),
+        Output("year-dropdown", "options"),
     ],
     [
         Input("player-dropdown", "value"),
@@ -309,9 +368,11 @@ def toggle_slider(tab):
         Input("month-dropdown", "value"),
         Input("year-dropdown", "value"),
         Input("hero-filter-dropdown", "value"),
+        Input("dummy-output", "children"),  # Trigger when data is updated
     ],
 )
-def update_all_graphs(player, min_games, season, month, year, hero_filter):
+def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
+    global df
 
     temp = filter_data(player, season, month, year)
     data_all = filter_data("all", season, month, year)
@@ -321,14 +382,13 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
     role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
     plays_fig = px.bar(title="Keine Held-Spieldaten verfügbar")
     stats = html.Div("Keine Daten verfügbar")
+    heatmap_fig = px.imshow([[0]], title="Keine Daten verfügbar")
 
     if not temp.empty:
         # === total game count ===
         if player == "all":
-
             unique_games = temp[["Datum", "Map"]].drop_duplicates()
         else:
-
             unique_games = temp
 
         total_games = unique_games.shape[0]
@@ -374,6 +434,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
                 hover_data=["Spiele"],
             )
             role_fig.update_layout(yaxis_tickformat=".0%")
+
         # === games-per-hero ===
         hero_counts = (
             temp.groupby("Hero")
@@ -393,9 +454,6 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
             plays_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
 
         # === Performance Heatmap: Hero × Map Winrate ===
-
-        heatmap_fig = px.imshow([[0]], title="Keine Daten verfügbar")  # Fallback
-
         if not temp.empty:
             pivot = temp.pivot_table(
                 index="Rolle",
@@ -404,26 +462,53 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
                 aggfunc=lambda x: (x == "Win").sum() / len(x),
             ).fillna(0)
 
-    if not pivot.empty:
-        heatmap_fig = px.imshow(
-            pivot,
-            text_auto=".0%",
-            color_continuous_scale="RdYlGn",
-            zmin=0,
-            zmax=1,
-            aspect="auto",
-            title=f"Winrate Heatmap – {player if player != 'all' else 'Alle Spieler'}",
-        )
-        heatmap_fig.update_layout(
-            xaxis_title="Map",
-            yaxis_title="Rolle",
-            margin=dict(l=40, r=20, t=60, b=40),
-        )
+            if not pivot.empty:
+                heatmap_fig = px.imshow(
+                    pivot,
+                    text_auto=".0%",
+                    color_continuous_scale="RdYlGn",
+                    zmin=0,
+                    zmax=1,
+                    aspect="auto",
+                    title=f"Winrate Heatmap – {player if player != 'all' else 'Alle Spieler'}",
+                )
+                heatmap_fig.update_layout(
+                    xaxis_title="Map",
+                    yaxis_title="Rolle",
+                    margin=dict(l=40, r=20, t=60, b=40),
+                )
 
     # === Dropdown-Optionen für Held ===
-    hero_options = [
-        {"label": h, "value": h} for h in sorted(temp["Hero"].dropna().unique())
-    ]
+    hero_options = (
+        [{"label": h, "value": h} for h in sorted(temp["Hero"].dropna().unique())]
+        if not temp.empty
+        else []
+    )
+
+    # === Time filter options ===
+    season_options = (
+        [{"label": s, "value": s} for s in sorted(df["Season"].dropna().unique())]
+        if not df.empty
+        else []
+    )
+
+    month_options = (
+        [
+            {"label": monat, "value": monat}
+            for monat in sorted(df["Monat"].dropna().unique())
+        ]
+        if not df.empty
+        else []
+    )
+
+    year_options = (
+        [
+            {"label": str(int(jahr)), "value": int(jahr)}
+            for jahr in sorted(df["Jahr"].dropna().unique())
+        ]
+        if not df.empty
+        else []
+    )
 
     # === Winrate Over Time ===
     winrate_fig = px.line(title="Keine Daten verfügbar")
@@ -435,11 +520,8 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
             time_data = time_data[time_data["Hero"] == hero_filter]
 
         if not time_data.empty:
-
             time_data = time_data.sort_values("Datum").reset_index(drop=True)
-
             time_data["WinBinary"] = (time_data["Win Lose"] == "Win").astype(int)
-
             time_data["GameNumber"] = range(1, len(time_data) + 1)
             time_data["CumulativeWins"] = time_data["WinBinary"].cumsum()
             time_data["CumulativeWinrate"] = (
@@ -458,12 +540,11 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
 
     if not data_all.empty:
         # === Corrected total game count ===
-
         unique_games = data_all[["Datum", "Map"]].drop_duplicates()
-
         unique_games = data_all.drop_duplicates(subset=["Datum", "Map"])
         total_games = unique_games.shape[0]
         wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
+
         # === Statistics ===
         stats = dbc.Row(
             [
@@ -506,6 +587,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
             ],
             className="mb-2",
         )
+
     return (
         map_fig,
         hero_fig,
@@ -515,6 +597,9 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
         stats,
         winrate_fig,
         hero_options,
+        season_options,
+        month_options,
+        year_options,
     )
 
 
