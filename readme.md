@@ -7,7 +7,7 @@ A simple dashboard to track Overwatch match statistics for me and my friends.
 - Win rates by hero (with min games filter)
 - Win rates by role
 - Win rates over time (by hero)
-- role/map heatmap
+- Role/Map heatmap
 - Filter by player 
 
 ## How to Use
