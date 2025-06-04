@@ -1,2 +1,6 @@
-
+# Ignore Excel files
 *.xlsx
+
+# Optional: Ignore OS files
+.DS_Store
+__pycache__/
