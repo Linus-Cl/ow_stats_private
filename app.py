@@ -267,14 +267,14 @@ def calculate_winrate(data, group_col):
     Input("year-dropdown", "value"),
 )
 def sync_time_filters(season, month, year):
-    # Wer hat ausgelöst?
+
     triggered = ctx.triggered_id
 
     if triggered == "season-dropdown" and season:
-        # Wenn Season gewählt → Monat und Jahr zurücksetzen
+
         return season, None, None
     elif triggered in ["month-dropdown", "year-dropdown"] and (month or year):
-        # Wenn Monat oder Jahr geändert wurden → Season zurücksetzen
+
         return None, month, year
     return season, month, year
 
@@ -285,7 +285,7 @@ def sync_time_filters(season, month, year):
     Input("tabs", "active_tab"),
 )
 def toggle_slider(tab):
-    if tab == "tab-2":  # Held-Winrate
+    if tab == "tab-2":
         return False, ""
     else:
         return True, "Nur relevant für 'Winrate nach Held'."
@@ -323,12 +323,12 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
     stats = html.Div("Keine Daten verfügbar")
 
     if not temp.empty:
-        # === Corrected total game count ===
+        # === total game count ===
         if player == "all":
-            # Use unique matches (e.g., by "Datum" and "Map" combination)
+
             unique_games = temp[["Datum", "Map"]].drop_duplicates()
         else:
-            # Each row is already a unique match for the player
+
             unique_games = temp
 
         total_games = unique_games.shape[0]
@@ -374,7 +374,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
                 hover_data=["Spiele"],
             )
             role_fig.update_layout(yaxis_tickformat=".0%")
-        # === NEU: Spiele-pro-Held ===
+        # === games-per-hero ===
         hero_counts = (
             temp.groupby("Hero")
             .size()
@@ -425,23 +425,21 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter):
         {"label": h, "value": h} for h in sorted(temp["Hero"].dropna().unique())
     ]
 
-    # === Zeitlicher Verlauf der Winrate ===
+    # === Winrate Over Time ===
     winrate_fig = px.line(title="Keine Daten verfügbar")
 
     if not temp.empty:
         time_data = temp.copy()
 
-        if hero_filter:  # Nur den gewählten Held
+        if hero_filter:
             time_data = time_data[time_data["Hero"] == hero_filter]
 
         if not time_data.empty:
-            # Datum aufsteigend sortieren
+
             time_data = time_data.sort_values("Datum").reset_index(drop=True)
 
-            # Umwandlung Win → 1, Lose → 0
             time_data["WinBinary"] = (time_data["Win Lose"] == "Win").astype(int)
 
-            # Kumulative Winrate berechnen
             time_data["GameNumber"] = range(1, len(time_data) + 1)
             time_data["CumulativeWins"] = time_data["WinBinary"].cumsum()
             time_data["CumulativeWinrate"] = (
