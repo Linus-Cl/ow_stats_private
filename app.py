@@ -3,6 +3,7 @@ import plotly.express as px
 from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
 import requests
+from dash import ctx
 
 # load excel sheet from url
 # url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
@@ -62,6 +63,48 @@ app.layout = dbc.Container(
                                                 100: "100",
                                             },
                                             included=False,
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label("Season auswählen:"),
+                                        dcc.Dropdown(
+                                            id="season-dropdown",
+                                            options=[
+                                                {"label": s, "value": s}
+                                                for s in sorted(
+                                                    df["Season"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label("Monat auswählen:"),
+                                        dcc.Dropdown(
+                                            id="month-dropdown",
+                                            options=[
+                                                {"label": monat, "value": monat}
+                                                for monat in sorted(
+                                                    df["Monat"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label("Jahr auswählen:"),
+                                        dcc.Dropdown(
+                                            id="year-dropdown",
+                                            options=[
+                                                {
+                                                    "label": str(int(jahr)),
+                                                    "value": int(jahr),
+                                                }
+                                                for jahr in sorted(
+                                                    df["Jahr"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
                                             className="mb-3",
                                         ),
                                     ]
@@ -124,41 +167,45 @@ app.layout = dbc.Container(
 )
 
 
-def filter_data(player):
+def filter_data(player, season=None, month=None, year=None):
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
 
+    # Priorität: Season hat Vorrang
+    if season:
+        temp = temp[temp["Season"] == season]
+    elif year:
+        if month:
+            temp = temp[(temp["Jahr"] == year) & (temp["Monat"] == month)]
+        else:
+            temp = temp[temp["Jahr"] == year]
+    elif month:
+        # Monat ohne Jahr ist ungenau – optional: ignorieren oder eigene Logik
+        temp = temp[temp["Monat"] == month]
+
+    # Spieler-Handling
     if player != "all":
         role_col = f"{player} Rolle"
         hero_col = f"{player} Hero"
-
-        # Filter for player participation
         temp = temp[temp[role_col].notna() & (temp[role_col] != "nicht dabei")]
         temp["Hero"] = temp[hero_col].str.strip()
         temp["Rolle"] = temp[role_col].str.strip()
     else:
-        # Combine data for all players
         hero_data = []
-
         for p in ["Steven", "Phil", "Bobo"]:
             role_col = f"{p} Rolle"
             hero_col = f"{p} Hero"
-
             player_matches = temp[
                 temp[role_col].notna() & (temp[role_col] != "nicht dabei")
             ].copy()
-
             if not player_matches.empty:
                 player_matches["Hero"] = player_matches[hero_col].str.strip()
                 player_matches["Rolle"] = player_matches[role_col].str.strip()
                 player_matches["Spieler"] = p
                 hero_data.append(player_matches)
-
         temp = pd.concat(hero_data) if hero_data else pd.DataFrame()
 
-    # Clean data
     if not temp.empty:
-        temp = temp[temp["Hero"].notna()]
-        temp = temp[temp["Hero"] != ""]
+        temp = temp[temp["Hero"].notna() & (temp["Hero"] != "")]
 
     return temp
 
@@ -184,17 +231,44 @@ def calculate_winrate(data, group_col):
 
 
 @app.callback(
+    Output("season-dropdown", "value"),
+    Output("month-dropdown", "value"),
+    Output("year-dropdown", "value"),
+    Input("season-dropdown", "value"),
+    Input("month-dropdown", "value"),
+    Input("year-dropdown", "value"),
+)
+def sync_time_filters(season, month, year):
+    # Wer hat ausgelöst?
+    triggered = ctx.triggered_id
+
+    if triggered == "season-dropdown" and season:
+        # Wenn Season gewählt → Monat und Jahr zurücksetzen
+        return season, None, None
+    elif triggered in ["month-dropdown", "year-dropdown"] and (month or year):
+        # Wenn Monat oder Jahr geändert wurden → Season zurücksetzen
+        return None, month, year
+    return season, month, year
+
+
+@app.callback(
     [
         Output("winrate-map-graph", "figure"),
         Output("winrate-hero-graph", "figure"),
         Output("winrate-role-graph", "figure"),
         Output("stats-container", "children"),
     ],
-    [Input("player-dropdown", "value"), Input("min-games-slider", "value")],
+    [
+        Input("player-dropdown", "value"),
+        Input("min-games-slider", "value"),
+        Input("season-dropdown", "value"),
+        Input("month-dropdown", "value"),
+        Input("year-dropdown", "value"),
+    ],
 )
-def update_all_graphs(player, min_games):
-    temp = filter_data(player)
-    data_all = filter_data("all")
+def update_all_graphs(player, min_games, season, month, year):
+    temp = filter_data(player, season, month, year)
+    data_all = filter_data("all", season, month, year)
 
     map_fig = px.bar(title="Keine Map-Daten verfügbar")
     hero_fig = px.bar(title="Keine Held-Daten verfügbar")
