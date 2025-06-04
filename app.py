@@ -3,16 +3,12 @@ import plotly.express as px
 from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
 
-# Daten laden
+# load and clean data | init app
 df = pd.read_excel("OW_Win_Stats.xlsx", sheet_name="Daten")
-
-# Spalten bereinigen
 df.columns = df.columns.str.strip()
-
-# App initialisieren
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# Layout
+# layout
 app.layout = dbc.Container(
     [
         html.H1("Overwatch Match-Analyse", className="my-4 text-center"),
@@ -112,7 +108,7 @@ app.layout = dbc.Container(
 )
 
 
-# Hilfsfunktionen
+# helperfunctions
 def filter_data(player, min_games=1):
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
 
@@ -120,12 +116,12 @@ def filter_data(player, min_games=1):
         role_col = f"{player} Rolle"
         hero_col = f"{player} Hero"
 
-        # Filtere nach Spieler, wenn er in der Partie war
+        # check if played
         temp = temp[temp[role_col].notna() & (temp[role_col] != "nicht dabei")]
         temp["Hero"] = temp[hero_col]
         temp["Rolle"] = temp[role_col]
     else:
-        # Für "Alle Spieler" müssen wir die Daten anders aufbereiten
+        # 'all players' case
         hero_data = []
 
         for p in ["Steven", "Phil", "Bobo"]:
@@ -191,7 +187,7 @@ def calculate_winrate(data, group_col):
 def update_all_graphs(player, min_games):
     temp = filter_data(player)
 
-    # Map Winrate
+    # map winrate
     map_data = calculate_winrate(temp, "Map")
     map_fig = px.bar(
         map_data,
@@ -202,7 +198,7 @@ def update_all_graphs(player, min_games):
     )
     map_fig.update_layout(yaxis_tickformat=".0%")
 
-    # Hero Winrate (mit Mindestanzahl Spielen)
+    # hero winrate
     hero_data = calculate_winrate(temp, "Hero")
     hero_data = hero_data[hero_data["Spiele"] >= min_games]
     hero_fig = px.bar(
@@ -217,7 +213,7 @@ def update_all_graphs(player, min_games):
     )
     hero_fig.update_layout(yaxis_tickformat=".0%")
 
-    # Role Winrate
+    # role winrate
     role_data = calculate_winrate(temp, "Rolle")
     role_fig = px.bar(
         role_data,
@@ -228,7 +224,6 @@ def update_all_graphs(player, min_games):
     )
     role_fig.update_layout(yaxis_tickformat=".0%")
 
-    # Statistik-Karten
     total_games = len(temp)
     wins = len(temp[temp["Win Lose"] == "Win"])
     winrate = wins / total_games if total_games > 0 else 0
