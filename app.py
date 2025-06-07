@@ -5,6 +5,7 @@ import dash_bootstrap_components as dbc
 import requests
 from dash import ctx
 import os
+from io import BytesIO, StringIO
 
 
 # Initialize app
@@ -18,30 +19,37 @@ def load_data(use_local=True):
     global df
     if use_local:
         try:
-            df = pd.read_excel("local.xlsx", sheet_name="Daten")
-            print("Loaded data from local.xlsx")
+            # First try reading as Excel
+            try:
+                df = pd.read_excel("local.xlsx", sheet_name=0, engine="openpyxl")
+                print("Loaded data from local.xlsx")
+            except:
+                # Fallback to CSV if Excel fails
+                df = pd.read_csv("local.xlsx")
+                print("Loaded CSV data from local.xlsx")
         except Exception as e:
             print(f"Error loading local file: {e}")
-            df = pd.DataFrame()
+            df = pd.DataFrame()  # Ensure df exists even if empty
     else:
         try:
-            url = "https://1drv.ms/x/c/52e69849288833a4/EcGhp7beEihJvXlvTDTu7TcBSwvjQkkS4fvYQubSeZHOPQ?e=SQ5bJc&download=1"
+            file_id = "1dMJ5nniCYicuOyf6JYXhNymbn7yikGuV"
+            url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+            # Download and read CSV directly
             response = requests.get(url)
-            response.raise_for_status()  # Raise an error for bad status codes
+            response.raise_for_status()
 
-            with open("local.xlsx", "wb") as f:
-                f.write(response.content)
+            # Use StringIO to read CSV content directly
+            df = pd.read_csv(StringIO(response.text))
 
-            df = pd.read_excel("local.xlsx", sheet_name="Daten")
-            print("Successfully downloaded and loaded data from URL")
+            # Save as Excel for future local use
+            df.to_excel("local.xlsx", index=False, engine="openpyxl")
+            print("Successfully downloaded and saved as Excel!")
+
         except Exception as e:
             print(f"Error downloading data: {e}")
-            # Fall back to local file if download fails
-            try:
-                df = pd.read_excel("local.xlsx", sheet_name="Daten")
-                print("Fell back to local.xlsx after download failed")
-            except Exception as e:
-                print(f"Error loading local file: {e}")
+            # Don't overwrite df if download fails
+            if "df" not in globals():
                 df = pd.DataFrame()
 
     if not df.empty:
