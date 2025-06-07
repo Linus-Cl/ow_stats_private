@@ -98,6 +98,48 @@ app.layout = dbc.Container(
                                             clearable=False,
                                             className="mb-3",
                                         ),
+                                        dbc.Label("Season auswählen:"),
+                                        dcc.Dropdown(
+                                            id="season-dropdown",
+                                            options=[
+                                                {"label": s, "value": s}
+                                                for s in sorted(
+                                                    df["Season"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label("Jahr auswählen:"),
+                                        dcc.Dropdown(
+                                            id="year-dropdown",
+                                            options=[
+                                                {
+                                                    "label": str(int(jahr)),
+                                                    "value": int(jahr),
+                                                }
+                                                for jahr in sorted(
+                                                    df["Jahr"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label("Monat auswählen:"),
+                                        dcc.Dropdown(
+                                            id="month-dropdown",
+                                            options=[
+                                                {"label": monat, "value": monat}
+                                                for monat in sorted(
+                                                    df["Monat"].dropna().unique()
+                                                )
+                                            ],
+                                            value=None,
+                                            placeholder="(keine ausgewählt)",
+                                            className="mb-3",
+                                        ),
                                         dbc.Label("Mindestanzahl Spiele:"),
                                         dcc.Slider(
                                             id="min-games-slider",
@@ -121,48 +163,6 @@ app.layout = dbc.Container(
                                             id="slider-hint",
                                             className="text-muted",
                                             style={"fontSize": "0.85em"},
-                                        ),
-                                        dbc.Label("Season auswählen:"),
-                                        dcc.Dropdown(
-                                            id="season-dropdown",
-                                            options=[
-                                                {"label": s, "value": s}
-                                                for s in sorted(
-                                                    df["Season"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
-                                        ),
-                                        dbc.Label("Monat auswählen:"),
-                                        dcc.Dropdown(
-                                            id="month-dropdown",
-                                            options=[
-                                                {"label": monat, "value": monat}
-                                                for monat in sorted(
-                                                    df["Monat"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
-                                        ),
-                                        dbc.Label("Jahr auswählen:"),
-                                        dcc.Dropdown(
-                                            id="year-dropdown",
-                                            options=[
-                                                {
-                                                    "label": str(int(jahr)),
-                                                    "value": int(jahr),
-                                                }
-                                                for jahr in sorted(
-                                                    df["Jahr"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
                                         ),
                                     ]
                                 ),
@@ -230,7 +230,7 @@ app.layout = dbc.Container(
                         dbc.Card(
                             [
                                 dbc.CardHeader(
-                                    "Gesamtstatistiken",
+                                    "Gesamtstatistiken (alle Spieler)",
                                     className="bg-primary text-white",
                                 ),
                                 dbc.CardBody([html.Div(id="stats-container")]),
