@@ -385,7 +385,6 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
 
     temp = filter_data(player, season, month, year)
     data_all = filter_data("all", season, month, year)
-
     map_fig = px.bar(title="Keine Map-Daten verfügbar")
     hero_fig = px.bar(title="Keine Held-Daten verfügbar")
     role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
@@ -396,7 +395,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
     if not temp.empty:
         # === total game count ===
         if player == "all":
-            unique_games = temp[["Datum", "Map"]].drop_duplicates()
+            unique_games = data_all
         else:
             unique_games = temp
 
@@ -548,11 +547,9 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
             )
 
     if not data_all.empty:
-        # === Corrected total game count ===
-        unique_games = data_all[["Datum", "Map"]].drop_duplicates()
-        unique_games = data_all.drop_duplicates(subset=["Datum", "Map"])
-        total_games = unique_games.shape[0]
-        wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
+        # === Corrected total game count using Match ID ===
+        total_games = data_all["Match ID"].nunique()
+        wins = data_all[data_all["Win Lose"] == "Win"]["Match ID"].nunique()
 
         # === Statistics ===
         stats = dbc.Row(
