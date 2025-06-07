@@ -550,6 +550,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
         # === Corrected total game count using Match ID ===
         total_games = data_all["Match ID"].nunique()
         wins = data_all[data_all["Win Lose"] == "Win"]["Match ID"].nunique()
+        losses = data_all[data_all["Win Lose"] == "Lose"]["Match ID"].nunique()
 
         # === Statistics ===
         stats = dbc.Row(
@@ -564,7 +565,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
                         ],
                         className="text-center",
                     ),
-                    width=4,
+                    width=3,
                 ),
                 dbc.Col(
                     dbc.Card(
@@ -576,7 +577,19 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
                         ],
                         className="text-center",
                     ),
-                    width=4,
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader(
+                                "Verloren", className="bg-danger text-white"
+                            ),
+                            dbc.CardBody(f"{losses}"),
+                        ],
+                        className="text-center",
+                    ),
+                    width=3,
                 ),
                 dbc.Col(
                     dbc.Card(
@@ -588,7 +601,7 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
                         ],
                         className="text-center",
                     ),
-                    width=4,
+                    width=3,
                 ),
             ],
             className="mb-2",
