@@ -90,11 +90,11 @@ app.layout = dbc.Container(
                                         dcc.Dropdown(
                                             id="player-dropdown",
                                             options=[
-                                                {"label": "Steven", "value": "Steven"},
-                                                {"label": "Phil", "value": "Phil"},
                                                 {"label": "Bobo", "value": "Bobo"},
+                                                {"label": "Phil", "value": "Phil"},
+                                                {"label": "Steven", "value": "Steven"},
                                             ],
-                                            value="Steven",
+                                            value="Bobo",
                                             clearable=False,
                                             className="mb-3",
                                         ),
