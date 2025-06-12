@@ -1,17 +1,16 @@
 import pandas as pd
 import plotly.express as px
-from dash import Dash, dcc, html, Input, Output, State
+from dash import Dash, dcc, html, Input, Output, ctx
 import dash_bootstrap_components as dbc
 import requests
-from dash import ctx
-import os
-from io import BytesIO, StringIO
+from io import StringIO
+
+import constants
 
 
 # Initialize app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-server = app.server  # Expose Flask server for hosting
-# Global variable to store the dataframe
+server = app.server
 df = pd.DataFrame()
 
 
@@ -32,14 +31,10 @@ def load_data(use_local=True):
             df = pd.DataFrame()  # Ensure df exists even if empty
     else:
         try:
-            file_id = "1dMJ5nniCYicuOyf6JYXhNymbn7yikGuV"
-            url = f"https://drive.google.com/uc?export=download&id={file_id}"
-
             # Download and read CSV directly
-            response = requests.get(url)
+            response = requests.get(constants.url)
             response.raise_for_status()
 
-            # Use StringIO to read CSV content directly
             df = pd.read_csv(StringIO(response.text))
 
             # Save as Excel for future local use
@@ -90,11 +85,20 @@ app.layout = dbc.Container(
                                         dcc.Dropdown(
                                             id="player-dropdown",
                                             options=[
-                                                {"label": "Bobo", "value": "Bobo"},
-                                                {"label": "Phil", "value": "Phil"},
-                                                {"label": "Steven", "value": "Steven"},
+                                                {
+                                                    "label": constants.players[0],
+                                                    "value": constants.players[0],
+                                                },
+                                                {
+                                                    "label": constants.players[1],
+                                                    "value": constants.players[1],
+                                                },
+                                                {
+                                                    "label": constants.players[2],
+                                                    "value": constants.players[2],
+                                                },
                                             ],
-                                            value="Bobo",
+                                            value=constants.players[0],
                                             clearable=False,
                                             className="mb-3",
                                         ),
@@ -255,7 +259,7 @@ def filter_data(player, season=None, month=None, year=None):
     global df
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
 
-    # Priorität: Season hat Vorrang
+    # Prioritize Season
     if season:
         temp = temp[temp["Season"] == season]
     elif year:
@@ -264,10 +268,9 @@ def filter_data(player, season=None, month=None, year=None):
         else:
             temp = temp[temp["Jahr"] == year]
     elif month:
-        # Monat ohne Jahr ist ungenau – optional: ignorieren oder eigene Logik
         temp = temp[temp["Monat"] == month]
 
-    # Spieler-Handling
+    # Player-Handling
     if player != "all":
         role_col = f"{player} Rolle"
         hero_col = f"{player} Hero"
@@ -276,7 +279,7 @@ def filter_data(player, season=None, month=None, year=None):
         temp["Rolle"] = temp[role_col].str.strip()
     else:
         hero_data = []
-        for p in ["Steven", "Phil", "Bobo"]:
+        for p in constants.players:
             role_col = f"{p} Rolle"
             hero_col = f"{p} Hero"
             player_matches = temp[
