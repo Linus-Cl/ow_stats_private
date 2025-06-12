@@ -1,6 +1,11 @@
 # Overwatch Stats Dashboard (WIP)
 
-A dashboard to track Overwatch match statistics.
+A dashboard to track and visualize Overwatch match and player statistics based self logged match data in Excel or Google sheets.
+
+A working example is live under https://retrac.pythonanywhere.com/ (initial load might take a while).
+
+<img width="1697" alt="dashboard_screen" src="https://github.com/user-attachments/assets/533b3cc6-28ff-4119-87e7-f0026ba29543" />
+
 
 ## Current Features
 - Win rates by map
