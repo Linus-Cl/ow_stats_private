@@ -466,16 +466,33 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
 
         # === Performance Heatmap: Hero × Map Winrate ===
         if not temp.empty:
-            pivot = temp.pivot_table(
+            # Create winrate pivot table
+            winrate_pivot = temp.pivot_table(
                 index="Rolle",
                 columns="Map",
                 values="Win Lose",
                 aggfunc=lambda x: (x == "Win").sum() / len(x),
             ).fillna(0)
 
-            if not pivot.empty:
+            # Create game count pivot table
+            count_pivot = temp.pivot_table(
+                index="Rolle",
+                columns="Map",
+                values="Win Lose",
+                aggfunc="count",
+            ).fillna(0)
+
+            if not winrate_pivot.empty:
+                # Create a list of lists for custom data containing both winrate and count
+                custom_data = []
+                for i in range(len(winrate_pivot)):
+                    row = []
+                    for j in range(len(winrate_pivot.columns)):
+                        row.append([winrate_pivot.iloc[i, j], count_pivot.iloc[i, j]])
+                    custom_data.append(row)
+
                 heatmap_fig = px.imshow(
-                    pivot,
+                    winrate_pivot,
                     text_auto=".0%",
                     color_continuous_scale="RdYlGn",
                     zmin=0,
@@ -483,6 +500,16 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
                     aspect="auto",
                     title=f"Winrate Heatmap – {player if player != 'all' else 'Alle Spieler'}",
                 )
+
+                # Add custom data to the figure
+                heatmap_fig.data[0].customdata = custom_data
+                heatmap_fig.data[0].hovertemplate = (
+                    "<b>Role:</b> %{y}<br>"
+                    "<b>Map:</b> %{x}<br>"
+                    "<b>Winrate:</b> %{z:.1%}<br>"
+                    "<b>Games Played:</b> %{customdata[1]:,}<extra></extra>"
+                )
+
                 heatmap_fig.update_layout(
                     xaxis_title="Map",
                     yaxis_title="Rolle",
