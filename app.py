@@ -49,6 +49,9 @@ def load_data(use_local=True):
 
     if not df.empty:
         df.columns = df.columns.str.strip()
+        # Clean Attack/Defense data
+        if "Attack Def" in df.columns:
+            df["Attack Def"] = df["Attack Def"].str.strip()
 
 
 # Load local data by default when starting
@@ -150,7 +153,7 @@ app.layout = dbc.Container(
                                             min=1,
                                             max=100,
                                             step=None,
-                                            value=25,
+                                            value=5,
                                             marks={
                                                 1: "1",
                                                 5: "5",
@@ -181,30 +184,161 @@ app.layout = dbc.Container(
                         dbc.Tabs(
                             [
                                 dbc.Tab(
-                                    dcc.Graph(id="winrate-map-graph"),
-                                    label="Winrate nach Map",
-                                    tab_id="tab-1",
+                                    [
+                                        dbc.Row(
+                                            dbc.Col(
+                                                [
+                                                    dbc.Row(
+                                                        [
+                                                            dbc.Col(
+                                                                dcc.Dropdown(
+                                                                    id="map-stat-type",
+                                                                    options=[
+                                                                        {
+                                                                            "label": "Winrate nach Map",
+                                                                            "value": "winrate",
+                                                                        },
+                                                                        {
+                                                                            "label": "Spiele pro Map",
+                                                                            "value": "plays",
+                                                                        },
+                                                                        {
+                                                                            "label": "Gamemode Statistik",
+                                                                            "value": "gamemode",
+                                                                        },
+                                                                        {
+                                                                            "label": "Attack/Defense Statistik",
+                                                                            "value": "attackdef",
+                                                                        },
+                                                                    ],
+                                                                    value="winrate",
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "100%",
+                                                                        "margin-bottom": "20px",
+                                                                    },
+                                                                ),
+                                                                width=4,  # Wider column for dropdown
+                                                                className="pe-2",
+                                                            ),
+                                                            dbc.Col(
+                                                                html.Div(
+                                                                    [
+                                                                        dbc.Switch(
+                                                                            id="map-view-type",
+                                                                            label="Detailliert",
+                                                                            value=False,
+                                                                            className="mt-1",
+                                                                        ),
+                                                                    ],
+                                                                    id="map-view-type-container",
+                                                                    style={
+                                                                        "margin-bottom": "20px"
+                                                                    },
+                                                                ),
+                                                                width=4,
+                                                                className="d-flex align-items-center ps-2",
+                                                            ),
+                                                        ],
+                                                        className="g-0 align-items-center",
+                                                    ),
+                                                    dbc.Row(
+                                                        dbc.Col(
+                                                            dcc.Graph(
+                                                                id="map-stat-graph"
+                                                            ),
+                                                            width=12,
+                                                        )
+                                                    ),
+                                                ],
+                                                width=12,
+                                            )
+                                        ),
+                                    ],
+                                    label="Map & Mode Statistik",
+                                    tab_id="tab-map",
                                 ),
+                                # Hero Statistics Tab
                                 dbc.Tab(
-                                    dcc.Graph(id="winrate-hero-graph"),
-                                    label="Winrate nach Held",
-                                    tab_id="tab-2",
+                                    [
+                                        dbc.Row(
+                                            dbc.Col(
+                                                dcc.Dropdown(
+                                                    id="hero-stat-type",
+                                                    options=[
+                                                        {
+                                                            "label": "Winrate nach Held",
+                                                            "value": "winrate",
+                                                        },
+                                                        {
+                                                            "label": "Spiele pro Held",
+                                                            "value": "plays",
+                                                        },
+                                                    ],
+                                                    value="winrate",
+                                                    clearable=False,
+                                                    style={
+                                                        "width": "300px",
+                                                        "margin-bottom": "20px",
+                                                    },
+                                                ),
+                                                width=12,
+                                            )
+                                        ),
+                                        dbc.Row(
+                                            dbc.Col(
+                                                dcc.Graph(id="hero-stat-graph"),
+                                                width=12,
+                                            )
+                                        ),
+                                    ],
+                                    label="Held Statistik",
+                                    tab_id="tab-hero",
                                 ),
+                                # Role Statistics Tab
                                 dbc.Tab(
-                                    dcc.Graph(id="winrate-role-graph"),
-                                    label="Winrate nach Rolle",
-                                    tab_id="tab-3",
+                                    [
+                                        dbc.Row(
+                                            dbc.Col(
+                                                dcc.Dropdown(
+                                                    id="role-stat-type",
+                                                    options=[
+                                                        {
+                                                            "label": "Winrate nach Rolle",
+                                                            "value": "winrate",
+                                                        },
+                                                        {
+                                                            "label": "Spiele pro Rolle",
+                                                            "value": "plays",
+                                                        },
+                                                    ],
+                                                    value="winrate",
+                                                    clearable=False,
+                                                    style={
+                                                        "width": "300px",
+                                                        "margin-bottom": "20px",
+                                                    },
+                                                ),
+                                                width=12,
+                                            )
+                                        ),
+                                        dbc.Row(
+                                            dbc.Col(
+                                                dcc.Graph(id="role-stat-graph"),
+                                                width=12,
+                                            )
+                                        ),
+                                    ],
+                                    label="Rollen Statistik",
+                                    tab_id="tab-role",
                                 ),
-                                dbc.Tab(
-                                    dcc.Graph(id="plays-hero-graph"),
-                                    label="Spiele pro Held",
-                                    tab_id="tab-4",
-                                ),
+                                # Performance Heatmap Tab
                                 dbc.Tab(
                                     dcc.Graph(id="performance-heatmap"),
                                     label="Performance Heatmap",
-                                    tab_id="tab-5",
+                                    tab_id="tab-heatmap",
                                 ),
+                                # Winrate Over Time Tab
                                 dbc.Tab(
                                     [
                                         dbc.Label("Held filtern (optional):"),
@@ -216,11 +350,11 @@ app.layout = dbc.Container(
                                         dcc.Graph(id="winrate-over-time"),
                                     ],
                                     label="Winrate Verlauf",
-                                    tab_id="tab-6",
+                                    tab_id="tab-trend",
                                 ),
                             ],
                             id="tabs",
-                            active_tab="tab-1",
+                            active_tab="tab-map",
                         )
                     ],
                     width=9,
@@ -337,15 +471,31 @@ def sync_time_filters(season, month, year):
 
 
 @app.callback(
+    Output("map-view-type-container", "style"), Input("map-stat-type", "value")
+)
+def toggle_view_type_visibility(map_stat_type):
+    """Show view type dropdown only for winrate map stats"""
+    return {"display": "block"} if map_stat_type == "winrate" else {"display": "none"}
+
+
+@app.callback(
     Output("min-games-slider", "disabled"),
     Output("slider-hint", "children"),
     Input("tabs", "active_tab"),
+    Input("hero-stat-type", "value"),
+    Input("role-stat-type", "value"),
+    Input("map-stat-type", "value"),
 )
-def toggle_slider(tab):
-    if tab == "tab-2":
+def toggle_slider(tab, hero_stat_type, role_stat_type, map_stat_type):
+    # Enable slider only when viewing winrate stats that need it
+    if (
+        (tab == "tab-hero" and hero_stat_type == "winrate")
+        or (tab == "tab-role" and role_stat_type == "winrate")
+        or (tab == "tab-map" and map_stat_type == "winrate")
+    ):
         return False, ""
     else:
-        return True, "Nur relevant für 'Winrate nach Held'."
+        return True, "Nur relevant für Winrate-Statistiken"
 
 
 @app.callback(
@@ -361,10 +511,9 @@ def update_data(n_clicks):
 
 @app.callback(
     [
-        Output("winrate-map-graph", "figure"),
-        Output("winrate-hero-graph", "figure"),
-        Output("winrate-role-graph", "figure"),
-        Output("plays-hero-graph", "figure"),
+        Output("map-stat-graph", "figure"),
+        Output("hero-stat-graph", "figure"),
+        Output("role-stat-graph", "figure"),
         Output("performance-heatmap", "figure"),
         Output("stats-container", "children"),
         Output("winrate-over-time", "figure"),
@@ -380,20 +529,38 @@ def update_data(n_clicks):
         Input("month-dropdown", "value"),
         Input("year-dropdown", "value"),
         Input("hero-filter-dropdown", "value"),
+        Input("hero-stat-type", "value"),
+        Input("role-stat-type", "value"),
+        Input("map-stat-type", "value"),
+        Input("map-view-type", "value"),
         Input("dummy-output", "children"),  # Trigger when data is updated
     ],
 )
-def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
+def update_all_graphs(
+    player,
+    min_games,
+    season,
+    month,
+    year,
+    hero_filter,
+    hero_stat_type,
+    role_stat_type,
+    map_stat_type,
+    map_view_type,
+    _,
+):
     global df
 
     temp = filter_data(player, season, month, year)
     data_all = filter_data("all", season, month, year)
-    map_fig = px.bar(title="Keine Map-Daten verfügbar")
-    hero_fig = px.bar(title="Keine Held-Daten verfügbar")
-    role_fig = px.bar(title="Keine Rollen-Daten verfügbar")
-    plays_fig = px.bar(title="Keine Held-Spieldaten verfügbar")
+
+    # Initialize all figures with empty states
+    map_fig = px.bar(title="Keine Daten verfügbar")
+    hero_fig = px.bar(title="Keine Daten verfügbar")
+    role_fig = px.bar(title="Keine Daten verfügbar")
     stats = html.Div("Keine Daten verfügbar")
     heatmap_fig = px.imshow([[0]], title="Keine Daten verfügbar")
+    winrate_fig = px.line(title="Keine Daten verfügbar")
 
     if not temp.empty:
         # === total game count ===
@@ -406,65 +573,281 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
         wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
         winrate = wins / total_games if total_games > 0 else 0
 
-        # === Map Winrate ===
-        map_data = calculate_winrate(temp, "Map")
-        if not map_data.empty:
-            map_fig = px.bar(
-                map_data,
-                x="Map",
-                y="Winrate",
-                title=f"Winrate nach Map ({player if player != 'all' else 'Alle Spieler'})",
-                hover_data=["Spiele"],
-            )
-            map_fig.update_layout(yaxis_tickformat=".0%")
+        # === Map Statistics ===
+        if map_stat_type == "winrate":
+            map_data = calculate_winrate(temp, "Map")
+            map_data = map_data[map_data["Spiele"] >= min_games]
 
-        # === Hero Winrate ===
-        hero_data = calculate_winrate(temp, "Hero")
-        hero_data = hero_data[hero_data["Spiele"] >= min_games]
-        if not hero_data.empty:
-            hero_fig = px.bar(
-                hero_data,
-                x="Hero",
-                y="Winrate",
-                title=f"Winrate nach Held (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                hover_data=["Spiele"],
-                color="Winrate",
-                color_continuous_scale="RdYlGn",
-                range_color=[0, 1],
+            if not map_data.empty:
+                if map_view_type and "Attack Def" in temp.columns:
+                    # Detailed view with attack/defense breakdown
+                    attack_def_data = temp[
+                        temp["Attack Def"].isin(["Attack", "Defense"])
+                    ].copy()
+
+                    combined_data = []
+
+                    for map_name in map_data["Map"].unique():
+                        # Overall stats
+                        map_stats = map_data[map_data["Map"] == map_name].iloc[0]
+                        combined_data.append(
+                            {
+                                "Map": map_name,
+                                "Mode": "Overall",
+                                "Winrate": map_stats["Winrate"],
+                                "Spiele": map_stats["Spiele"],
+                                "Wins": map_stats["Win"],
+                                "Losses": map_stats["Lose"],
+                            }
+                        )
+
+                        # Attack/Defense stats
+                        map_specific = attack_def_data[
+                            attack_def_data["Map"] == map_name
+                        ]
+                        if not map_specific.empty:
+                            attack_def_stats = calculate_winrate(
+                                map_specific, "Attack Def"
+                            )
+                            for mode in ["Attack", "Defense"]:
+                                if mode in attack_def_stats["Attack Def"].values:
+                                    mode_stats = attack_def_stats[
+                                        attack_def_stats["Attack Def"] == mode
+                                    ].iloc[0]
+                                    combined_data.append(
+                                        {
+                                            "Map": map_name,
+                                            "Mode": mode,
+                                            "Winrate": mode_stats["Winrate"],
+                                            "Spiele": mode_stats["Spiele"],
+                                            "Wins": mode_stats["Win"],
+                                            "Losses": mode_stats["Lose"],
+                                        }
+                                    )
+
+                    combined_df = pd.DataFrame(combined_data)
+
+                    # Create the figure
+                    map_fig = px.bar(
+                        combined_df,
+                        x="Map",
+                        y="Winrate",
+                        color="Mode",
+                        barmode="group",
+                        title=f"Map Winrates (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                        color_discrete_map={
+                            "Overall": "#636EFA",
+                            "Attack": "#EF553B",
+                            "Defense": "#00CC96",
+                        },
+                        category_orders={"Mode": ["Overall", "Attack", "Defense"]},
+                    )
+
+                    # Customize hover template
+                    map_fig.update_traces(
+                        hovertemplate=(
+                            "<b>%{x}</b> (%{fullData.name})<br>"
+                            "Winrate: %{y:.1%}<br>"
+                            "Spiele: %{customdata[0]}<br>"
+                            "Gewonnen: %{customdata[1]}<br>"
+                            "Verloren: %{customdata[2]}<extra></extra>"
+                        ),
+                        customdata=combined_df[["Spiele", "Wins", "Losses"]],
+                    )
+
+                    map_fig.update_layout(
+                        yaxis_tickformat=".0%",
+                        yaxis_title="Winrate",
+                        xaxis_title="Map",
+                        legend_title="",
+                        hovermode="x unified",
+                    )
+
+                else:
+                    # Simple view
+                    map_fig = px.bar(
+                        map_data,
+                        x="Map",
+                        y="Winrate",
+                        title=f"Winrate nach Map (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                        hover_data={
+                            "Winrate": False,
+                            "Spiele": True,
+                        },
+                        color="Winrate",
+                        color_continuous_scale="RdYlGn",
+                        range_color=[0, 1],
+                    )
+                    map_fig.update_layout(yaxis_tickformat=".0%")
+                    map_fig.update_traces(
+                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                        customdata=map_data[["Spiele"]],
+                    )
+            else:
+                map_fig = px.bar(title="Keine Map-Daten verfügbar")
+
+        elif map_stat_type == "plays":
+            # Plays view (no view type toggle)
+            map_counts = (
+                temp.groupby("Map")
+                .size()
+                .reset_index(name="Spiele")
+                .sort_values("Spiele", ascending=False)
             )
+            if not map_counts.empty:
+                map_fig = px.bar(
+                    map_counts,
+                    x="Map",
+                    y="Spiele",
+                    text="Spiele",
+                    hover_data={
+                        "Spiele": True,
+                    },
+                    title=f"Spiele pro Map ({'Alle Spieler' if player=='all' else player})",
+                )
+                map_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
+                map_fig.update_traces(
+                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
+                    customdata=map_counts[["Spiele"]],
+                )
+
+        elif map_stat_type == "gamemode":
+            # Gamemode view (no view type toggle)
+            if "Gamemode" in temp.columns:
+                gamemode_data = calculate_winrate(temp, "Gamemode")
+                gamemode_data = gamemode_data[gamemode_data["Spiele"] >= min_games]
+                if not gamemode_data.empty:
+                    map_fig = px.bar(
+                        gamemode_data,
+                        x="Gamemode",
+                        y="Winrate",
+                        hover_data={
+                            "Winrate": False,
+                            "Spiele": True,
+                        },
+                        title=f"Winrate nach Gamemode (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                        color="Winrate",
+                        color_continuous_scale="RdYlGn",
+                        range_color=[0, 1],
+                    )
+                    map_fig.update_layout(yaxis_tickformat=".0%")
+                    map_fig.update_traces(
+                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                        customdata=gamemode_data[["Spiele"]],
+                    )
+
+        elif map_stat_type == "attackdef":
+            # Attack/defense view (no view type toggle)
+            if "Attack Def" in temp.columns:
+                attackdef_data = calculate_winrate(temp, "Attack Def")
+                attackdef_data = attackdef_data[attackdef_data["Spiele"] >= min_games]
+                if not attackdef_data.empty:
+                    map_fig = px.bar(
+                        attackdef_data,
+                        x="Attack Def",
+                        y="Winrate",
+                        title=f"Winrate nach Attack/Defense (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                        color="Winrate",
+                        color_continuous_scale="RdYlGn",
+                        range_color=[0, 1],
+                    )
+                    map_fig.update_layout(yaxis_tickformat=".0%")
+                    map_fig.update_traces(
+                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                        customdata=attackdef_data[["Spiele"]],
+                    )
+
+        # === Hero Statistics ===
+        if hero_stat_type == "winrate":
+            hero_data = calculate_winrate(temp, "Hero")
+            hero_data = hero_data[hero_data["Spiele"] >= min_games]
+            if not hero_data.empty:
+                hero_fig = px.bar(
+                    hero_data,
+                    x="Hero",
+                    y="Winrate",
+                    title=f"Winrate nach Held (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                    hover_data={
+                        "Winrate": False,
+                        "Spiele": True,
+                    },
+                    color="Winrate",
+                    color_continuous_scale="RdYlGn",
+                    range_color=[0, 1],
+                )
+
             hero_fig.update_layout(yaxis_tickformat=".0%")
 
-        # === Role Winrate ===
-        role_data = calculate_winrate(temp, "Rolle")
-        if not role_data.empty:
-            role_fig = px.bar(
-                role_data,
-                x="Rolle",
-                y="Winrate",
-                title=f"Winrate nach Rolle ({player if player != 'all' else 'Alle Spieler'})",
-                hover_data=["Spiele"],
+            hero_fig.update_traces(
+                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                customdata=hero_data[["Spiele"]],
             )
-            role_fig.update_layout(yaxis_tickformat=".0%")
-
-        # === games-per-hero ===
-        hero_counts = (
-            temp.groupby("Hero")
-            .size()
-            .reset_index(name="Spiele")
-            .sort_values("Spiele", ascending=False)
-        )
-
-        if not hero_counts.empty:
-            plays_fig = px.bar(
-                hero_counts,
-                x="Hero",
-                y="Spiele",
-                text="Spiele",
-                title=f"Spiele pro Held ({'Alle Spieler' if player=='all' else player})",
+        else:
+            hero_counts = (
+                temp.groupby("Hero")
+                .size()
+                .reset_index(name="Spiele")
+                .sort_values("Spiele", ascending=False)
             )
-            plays_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
+            if not hero_counts.empty:
+                hero_fig = px.bar(
+                    hero_counts,
+                    x="Hero",
+                    y="Spiele",
+                    text="Spiele",
+                    title=f"Spiele pro Held ({'Alle Spieler' if player=='all' else player})",
+                )
+                hero_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
+                hero_fig.update_traces(
+                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
+                    customdata=hero_counts[["Spiele"]],
+                )
 
-        # === Performance Heatmap: Hero × Map Winrate ===
+        # === Role Statistics ===
+        if role_stat_type == "winrate":
+            role_data = calculate_winrate(temp, "Rolle")
+            role_data = role_data[role_data["Spiele"] >= min_games]
+            if not role_data.empty:
+                role_fig = px.bar(
+                    role_data,
+                    x="Rolle",
+                    y="Winrate",
+                    title=f"Winrate nach Rolle (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
+                    hover_data={
+                        "Winrate": False,
+                        "Spiele": True,
+                    },
+                    color="Winrate",
+                    color_continuous_scale="RdYlGn",
+                    range_color=[0, 1],
+                )
+                role_fig.update_layout(yaxis_tickformat=".0%")
+                role_fig.update_traces(
+                    hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                    customdata=role_data[["Spiele"]],
+                )
+        else:
+            role_counts = (
+                temp.groupby("Rolle")
+                .size()
+                .reset_index(name="Spiele")
+                .sort_values("Spiele", ascending=False)
+            )
+            if not role_counts.empty:
+                role_fig = px.bar(
+                    role_counts,
+                    x="Rolle",
+                    y="Spiele",
+                    text="Spiele",
+                    title=f"Spiele pro Rolle ({'Alle Spieler' if player=='all' else player})",
+                )
+                role_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
+                role_fig.update_traces(
+                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
+                    customdata=role_counts[["Spiele"]],
+                )
+
+        # === Performance Heatmap: Role × Map Winrate ===
         if not temp.empty:
             # Create winrate pivot table
             winrate_pivot = temp.pivot_table(
@@ -549,8 +932,6 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
     )
 
     # === Winrate Over Time ===
-    winrate_fig = px.line(title="Keine Daten verfügbar")
-
     if not temp.empty:
         time_data = temp.copy()
 
@@ -574,6 +955,10 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
             )
             winrate_fig.update_layout(
                 yaxis_tickformat=".0%", yaxis_title="Winrate", xaxis_title="Spielnummer"
+            )
+            winrate_fig.update_traces(
+                hovertemplate="<b>Gamenumber: %{x}</b><br>Winrate: %{y:.1%}<br>Hero: %{customdata[0]}<extra></extra>",
+                customdata=time_data[["Hero"]],
             )
 
     if not data_all.empty:
@@ -641,7 +1026,6 @@ def update_all_graphs(player, min_games, season, month, year, hero_filter, _):
         map_fig,
         hero_fig,
         role_fig,
-        plays_fig,
         heatmap_fig,
         stats,
         winrate_fig,
