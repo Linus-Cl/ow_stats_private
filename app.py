@@ -627,6 +627,9 @@ def update_all_graphs(
 
                     combined_df = pd.DataFrame(combined_data)
 
+                    # Prepare customdata as numpy array to ensure proper alignment
+                    custom_data = combined_df[["Spiele", "Wins", "Losses"]].values
+
                     # Create the figure
                     map_fig = px.bar(
                         combined_df,
@@ -643,17 +646,24 @@ def update_all_graphs(
                         category_orders={"Mode": ["Overall", "Attack", "Defense"]},
                     )
 
-                    # Customize hover template
-                    map_fig.update_traces(
-                        hovertemplate=(
-                            "<b>%{x}</b> (%{fullData.name})<br>"
-                            "Winrate: %{y:.1%}<br>"
-                            "Spiele: %{customdata[0]}<br>"
-                            "Gewonnen: %{customdata[1]}<br>"
-                            "Verloren: %{customdata[2]}<extra></extra>"
-                        ),
-                        customdata=combined_df[["Spiele", "Wins", "Losses"]],
-                    )
+                    # Update traces with properly aligned customdata
+                    for i, mode in enumerate(combined_df["Mode"].unique()):
+                        mode_data = combined_df[combined_df["Mode"] == mode]
+                        mode_custom_data = mode_data[
+                            ["Spiele", "Wins", "Losses"]
+                        ].values
+
+                        map_fig.update_traces(
+                            selector={"name": mode},
+                            hovertemplate=(
+                                "<b>%{x}</b> (%{fullData.name})<br>"
+                                "Winrate: %{y:.1%}<br>"
+                                "Spiele: %{customdata[0]}<br>"
+                                "Gewonnen: %{customdata[1]}<br>"
+                                "Verloren: %{customdata[2]}<extra></extra>"
+                            ),
+                            customdata=mode_custom_data,
+                        )
 
                     map_fig.update_layout(
                         yaxis_tickformat=".0%",
