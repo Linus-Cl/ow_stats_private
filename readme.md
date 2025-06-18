@@ -11,9 +11,12 @@ A working example is live under https://retrac.pythonanywhere.com/ (initial load
 - Win rates by map
 - Win rates by hero (with min games filter)
 - Win rates by role
+- Win rates by attack/defense
+- Win rates by Gamemode
 - Win rates over time (by hero)
 - Role/Map heatmap
-- Filter by player 
+- Filter by player
+- Filter by Season or Month
 - Data Updates from the cloud (Google sheets)
 
 ## How to Use
