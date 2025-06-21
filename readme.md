@@ -1,4 +1,4 @@
-# Overwatch Stats Dashboard (WIP)
+# Overwatch Stats Dashboard
 
 A dashboard to track and visualize Overwatch match and player statistics based self logged match data in Excel or Google sheets.
 
