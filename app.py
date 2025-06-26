@@ -1,77 +1,98 @@
 import pandas as pd
 import plotly.express as px
-from dash import Dash, dcc, html, Input, Output, ctx
+import plotly.graph_objects as go
+from dash import Dash, dcc, html, Input, Output, ctx, State, ALL
 import dash_bootstrap_components as dbc
 import requests
 from io import StringIO
+import re
 
+# --- Local Imports ---
 import constants
 
 
-# Initialize app
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# --- App Initialization ---
+app = Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
+    suppress_callback_exceptions=True,
+)
 server = app.server
 df = pd.DataFrame()
 
 
+# --- Data Loading ---
 def load_data(use_local=True):
+    """
+    Loads data and performs a definitive sort by 'Match ID' descending.
+    This ensures the most recent game is always at the top.
+    """
     global df
     if use_local:
         try:
-            # First try reading as Excel
-            try:
-                df = pd.read_excel("local.xlsx", sheet_name=0, engine="openpyxl")
-                print("Loaded data from local.xlsx")
-            except:
-                # Fallback to CSV if Excel fails
-                df = pd.read_csv("local.xlsx")
-                print("Loaded CSV data from local.xlsx")
+            df = pd.read_excel("local.xlsx", engine="openpyxl")
+            print("Loaded data from local.xlsx")
         except Exception as e:
             print(f"Error loading local file: {e}")
-            df = pd.DataFrame()  # Ensure df exists even if empty
+            df = pd.DataFrame()
     else:
         try:
-            # Download and read CSV directly
             response = requests.get(constants.url)
             response.raise_for_status()
-
             df = pd.read_csv(StringIO(response.text))
-
-            # Save as Excel for future local use
             df.to_excel("local.xlsx", index=False, engine="openpyxl")
             print("Successfully downloaded and saved as Excel!")
-
         except Exception as e:
             print(f"Error downloading data: {e}")
-            # Don't overwrite df if download fails
             if "df" not in globals():
                 df = pd.DataFrame()
 
     if not df.empty:
         df.columns = df.columns.str.strip()
-        # Clean Attack/Defense data
         if "Attack Def" in df.columns:
             df["Attack Def"] = df["Attack Def"].str.strip()
+        if "Datum" in df.columns:
+            df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+
+        if "Match ID" in df.columns:
+            df["Match ID"] = pd.to_numeric(df["Match ID"], errors="coerce")
+            df.sort_values("Match ID", ascending=False, inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            print("DataFrame sorted by Match ID (descending).")
+        else:
+            print("Warning: 'Match ID' column not found. History may not be in order.")
 
 
-# Load local data by default when starting
+# Initial data load
 load_data(use_local=True)
 
-# Layout
+
+# --- Layout (Unchanged) ---
 app.layout = dbc.Container(
     [
-        html.H1("Overwatch Statistics", className="my-4 text-center"),
+        dcc.Store(id="history-display-count-store", data={"count": 10}),
         dbc.Row(
-            dbc.Col(
-                dbc.Button(
-                    "Update Data from Cloud",
-                    id="update-data-button",
-                    color="primary",
-                    className="mb-3",
-                    n_clicks=0,
+            [
+                dbc.Col(
+                    html.Img(
+                        src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png",
+                        height="50px",
+                    ),
+                    width="auto",
                 ),
-                width={"size": 3, "offset": 9},
-            )
+                dbc.Col(html.H1("Overwatch Statistics", className="my-4"), width=True),
+                dbc.Col(
+                    dbc.Button(
+                        "Update Data from Cloud",
+                        id="update-data-button",
+                        color="primary",
+                        className="mt-4",
+                    ),
+                    width="auto",
+                ),
+            ],
+            align="center",
+            className="mb-3",
         ),
         dbc.Row(
             [
@@ -88,64 +109,35 @@ app.layout = dbc.Container(
                                         dcc.Dropdown(
                                             id="player-dropdown",
                                             options=[
-                                                {
-                                                    "label": constants.players[0],
-                                                    "value": constants.players[0],
-                                                },
-                                                {
-                                                    "label": constants.players[1],
-                                                    "value": constants.players[1],
-                                                },
-                                                {
-                                                    "label": constants.players[2],
-                                                    "value": constants.players[2],
-                                                },
+                                                {"label": p, "value": p}
+                                                for p in constants.players
                                             ],
                                             value=constants.players[0],
                                             clearable=False,
                                             className="mb-3",
                                         ),
-                                        dbc.Label("Season auswählen:"),
+                                        dbc.Label(
+                                            "Season auswählen (überschreibt Jahr/Monat):"
+                                        ),
                                         dcc.Dropdown(
                                             id="season-dropdown",
-                                            options=[
-                                                {"label": s, "value": s}
-                                                for s in sorted(
-                                                    df["Season"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
                                             placeholder="(keine ausgewählt)",
                                             className="mb-3",
+                                            clearable=True,
                                         ),
                                         dbc.Label("Jahr auswählen:"),
                                         dcc.Dropdown(
                                             id="year-dropdown",
-                                            options=[
-                                                {
-                                                    "label": str(int(jahr)),
-                                                    "value": int(jahr),
-                                                }
-                                                for jahr in sorted(
-                                                    df["Jahr"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
                                             placeholder="(keine ausgewählt)",
                                             className="mb-3",
+                                            clearable=True,
                                         ),
                                         dbc.Label("Monat auswählen:"),
                                         dcc.Dropdown(
                                             id="month-dropdown",
-                                            options=[
-                                                {"label": monat, "value": monat}
-                                                for monat in sorted(
-                                                    df["Monat"].dropna().unique()
-                                                )
-                                            ],
-                                            value=None,
                                             placeholder="(keine ausgewählt)",
                                             className="mb-3",
+                                            clearable=True,
                                         ),
                                         dbc.Label("Mindestanzahl Spiele:"),
                                         dcc.Slider(
@@ -171,6 +163,11 @@ app.layout = dbc.Container(
                                             className="text-muted",
                                             style={"fontSize": "0.85em"},
                                         ),
+                                        html.Hr(),
+                                        html.Div(
+                                            id="compare-switches-container",
+                                            className="mt-3",
+                                        ),
                                     ]
                                 ),
                             ],
@@ -184,163 +181,121 @@ app.layout = dbc.Container(
                         dbc.Tabs(
                             [
                                 dbc.Tab(
-                                    [
-                                        dbc.Row(
-                                            dbc.Col(
-                                                [
-                                                    dbc.Row(
-                                                        [
-                                                            dbc.Col(
-                                                                dcc.Dropdown(
-                                                                    id="map-stat-type",
-                                                                    options=[
-                                                                        {
-                                                                            "label": "Winrate nach Map",
-                                                                            "value": "winrate",
-                                                                        },
-                                                                        {
-                                                                            "label": "Spiele pro Map",
-                                                                            "value": "plays",
-                                                                        },
-                                                                        {
-                                                                            "label": "Gamemode Statistik",
-                                                                            "value": "gamemode",
-                                                                        },
-                                                                        {
-                                                                            "label": "Attack/Defense Statistik",
-                                                                            "value": "attackdef",
-                                                                        },
-                                                                    ],
-                                                                    value="winrate",
-                                                                    clearable=False,
-                                                                    style={
-                                                                        "width": "100%",
-                                                                        "margin-bottom": "20px",
-                                                                    },
-                                                                ),
-                                                                width=4,  # Wider column for dropdown
-                                                                className="pe-2",
-                                                            ),
-                                                            dbc.Col(
-                                                                html.Div(
-                                                                    [
-                                                                        dbc.Switch(
-                                                                            id="map-view-type",
-                                                                            label="Detailliert",
-                                                                            value=False,
-                                                                            className="mt-1",
-                                                                        ),
-                                                                    ],
-                                                                    id="map-view-type-container",
-                                                                    style={
-                                                                        "margin-bottom": "20px"
-                                                                    },
-                                                                ),
-                                                                width=4,
-                                                                className="d-flex align-items-center ps-2",
-                                                            ),
-                                                        ],
-                                                        className="g-0 align-items-center",
-                                                    ),
-                                                    dbc.Row(
-                                                        dbc.Col(
-                                                            dcc.Graph(
-                                                                id="map-stat-graph"
-                                                            ),
-                                                            width=12,
-                                                        )
-                                                    ),
-                                                ],
-                                                width=12,
-                                            )
-                                        ),
-                                    ],
                                     label="Map & Mode Statistik",
                                     tab_id="tab-map",
-                                ),
-                                # Hero Statistics Tab
-                                dbc.Tab(
-                                    [
+                                    children=[
                                         dbc.Row(
-                                            dbc.Col(
-                                                dcc.Dropdown(
-                                                    id="hero-stat-type",
-                                                    options=[
-                                                        {
-                                                            "label": "Winrate nach Held",
-                                                            "value": "winrate",
+                                            [
+                                                dbc.Col(
+                                                    dcc.Dropdown(
+                                                        id="map-stat-type",
+                                                        value="winrate",
+                                                        clearable=False,
+                                                        style={
+                                                            "width": "100%",
+                                                            "margin-bottom": "20px",
                                                         },
-                                                        {
-                                                            "label": "Spiele pro Held",
-                                                            "value": "plays",
-                                                        },
-                                                    ],
-                                                    value="winrate",
-                                                    clearable=False,
-                                                    style={
-                                                        "width": "300px",
-                                                        "margin-bottom": "20px",
-                                                    },
+                                                        options=[
+                                                            {
+                                                                "label": "Winrate nach Map",
+                                                                "value": "winrate",
+                                                            },
+                                                            {
+                                                                "label": "Spiele pro Map",
+                                                                "value": "plays",
+                                                            },
+                                                            {
+                                                                "label": "Gamemode Statistik",
+                                                                "value": "gamemode",
+                                                            },
+                                                            {
+                                                                "label": "Attack/Defense Statistik",
+                                                                "value": "attackdef",
+                                                            },
+                                                        ],
+                                                    ),
+                                                    width=4,
                                                 ),
-                                                width=12,
-                                            )
+                                                dbc.Col(
+                                                    html.Div(
+                                                        dbc.Switch(
+                                                            id="map-view-type",
+                                                            label="Detailliert",
+                                                            value=False,
+                                                            className="mt-1",
+                                                        ),
+                                                        id="map-view-type-container",
+                                                        style={"margin-bottom": "20px"},
+                                                    ),
+                                                    width=4,
+                                                    className="d-flex align-items-center",
+                                                ),
+                                            ]
                                         ),
-                                        dbc.Row(
-                                            dbc.Col(
-                                                dcc.Graph(id="hero-stat-graph"),
-                                                width=12,
-                                            )
-                                        ),
+                                        dcc.Graph(id="map-stat-graph"),
                                     ],
+                                ),
+                                dbc.Tab(
                                     label="Held Statistik",
                                     tab_id="tab-hero",
-                                ),
-                                # Role Statistics Tab
-                                dbc.Tab(
-                                    [
-                                        dbc.Row(
-                                            dbc.Col(
-                                                dcc.Dropdown(
-                                                    id="role-stat-type",
-                                                    options=[
-                                                        {
-                                                            "label": "Winrate nach Rolle",
-                                                            "value": "winrate",
-                                                        },
-                                                        {
-                                                            "label": "Spiele pro Rolle",
-                                                            "value": "plays",
-                                                        },
-                                                    ],
-                                                    value="winrate",
-                                                    clearable=False,
-                                                    style={
-                                                        "width": "300px",
-                                                        "margin-bottom": "20px",
-                                                    },
-                                                ),
-                                                width=12,
-                                            )
+                                    children=[
+                                        dcc.Dropdown(
+                                            id="hero-stat-type",
+                                            value="winrate",
+                                            clearable=False,
+                                            style={
+                                                "width": "300px",
+                                                "margin-bottom": "20px",
+                                            },
+                                            options=[
+                                                {
+                                                    "label": "Winrate nach Held",
+                                                    "value": "winrate",
+                                                },
+                                                {
+                                                    "label": "Spiele pro Held",
+                                                    "value": "plays",
+                                                },
+                                            ],
                                         ),
-                                        dbc.Row(
-                                            dbc.Col(
-                                                dcc.Graph(id="role-stat-graph"),
-                                                width=12,
-                                            )
-                                        ),
+                                        dcc.Graph(id="hero-stat-graph"),
                                     ],
+                                ),
+                                dbc.Tab(
                                     label="Rollen Statistik",
                                     tab_id="tab-role",
+                                    children=[
+                                        dcc.Dropdown(
+                                            id="role-stat-type",
+                                            value="winrate",
+                                            clearable=False,
+                                            style={
+                                                "width": "300px",
+                                                "margin-bottom": "20px",
+                                            },
+                                            options=[
+                                                {
+                                                    "label": "Winrate nach Rolle",
+                                                    "value": "winrate",
+                                                },
+                                                {
+                                                    "label": "Spiele pro Rolle",
+                                                    "value": "plays",
+                                                },
+                                            ],
+                                        ),
+                                        dcc.Graph(id="role-stat-graph"),
+                                    ],
                                 ),
-                                # Performance Heatmap Tab
                                 dbc.Tab(
                                     dcc.Graph(id="performance-heatmap"),
                                     label="Performance Heatmap",
                                     tab_id="tab-heatmap",
                                 ),
-                                # Winrate Over Time Tab
                                 dbc.Tab(
-                                    [
+                                    label="Winrate Verlauf",
+                                    tab_id="tab-trend",
+                                    children=[
                                         dbc.Label("Held filtern (optional):"),
                                         dcc.Dropdown(
                                             id="hero-filter-dropdown",
@@ -349,8 +304,56 @@ app.layout = dbc.Container(
                                         ),
                                         dcc.Graph(id="winrate-over-time"),
                                     ],
-                                    label="Winrate Verlauf",
-                                    tab_id="tab-trend",
+                                ),
+                                dbc.Tab(
+                                    label="Match Verlauf",
+                                    tab_id="tab-history",
+                                    children=[
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(width=6),
+                                                dbc.Col(
+                                                    dcc.Dropdown(
+                                                        id="history-load-amount-dropdown",
+                                                        options=[
+                                                            {
+                                                                "label": "10 weitere laden",
+                                                                "value": 10,
+                                                            },
+                                                            {
+                                                                "label": "25 weitere laden",
+                                                                "value": 25,
+                                                            },
+                                                            {
+                                                                "label": "50 weitere laden",
+                                                                "value": 50,
+                                                            },
+                                                        ],
+                                                        value=10,
+                                                        clearable=False,
+                                                    ),
+                                                    width=3,
+                                                ),
+                                                dbc.Col(
+                                                    dbc.Button(
+                                                        "Load More",
+                                                        id="load-more-history-button",
+                                                        color="secondary",
+                                                        className="w-100",
+                                                    ),
+                                                    width=3,
+                                                ),
+                                            ],
+                                            className="my-3",
+                                        ),
+                                        html.Div(
+                                            id="history-list-container",
+                                            style={
+                                                "maxHeight": "1000px",
+                                                "overflowY": "auto",
+                                            },
+                                        ),
+                                    ],
                                 ),
                             ],
                             id="tabs",
@@ -368,8 +371,7 @@ app.layout = dbc.Container(
                         dbc.Card(
                             [
                                 dbc.CardHeader(
-                                    "Gesamtstatistiken (alle Spieler)",
-                                    className="bg-primary text-white",
+                                    id="stats-header", className="bg-primary text-white"
                                 ),
                                 dbc.CardBody([html.Div(id="stats-container")]),
                             ]
@@ -380,101 +382,198 @@ app.layout = dbc.Container(
             ],
             className="mt-4",
         ),
-        dcc.Store(id="data-store"),  # Store component to trigger callbacks
-        html.Div(
-            id="dummy-output", style={"display": "none"}
-        ),  # Hidden div for callback output
+        html.Div(id="dummy-output", style={"display": "none"}),
     ],
     fluid=True,
 )
 
 
+# --- Helper Functions (Unchanged) ---
 def filter_data(player, season=None, month=None, year=None):
     global df
+    if df.empty:
+        return pd.DataFrame()
     temp = df[df["Win Lose"].isin(["Win", "Lose"])].copy()
-
-    # Prioritize Season
     if season:
         temp = temp[temp["Season"] == season]
-    elif year:
-        if month:
-            temp = temp[(temp["Jahr"] == year) & (temp["Monat"] == month)]
-        else:
-            temp = temp[temp["Jahr"] == year]
-    elif month:
-        temp = temp[temp["Monat"] == month]
-
-    # Player-Handling
-    if player != "all":
-        role_col = f"{player} Rolle"
-        hero_col = f"{player} Hero"
-        temp = temp[temp[role_col].notna() & (temp[role_col] != "nicht dabei")]
-        temp["Hero"] = temp[hero_col].str.strip()
-        temp["Rolle"] = temp[role_col].str.strip()
     else:
-        hero_data = []
-        for p in constants.players:
-            role_col = f"{p} Rolle"
-            hero_col = f"{p} Hero"
-            player_matches = temp[
-                temp[role_col].notna() & (temp[role_col] != "nicht dabei")
-            ].copy()
-            if not player_matches.empty:
-                player_matches["Hero"] = player_matches[hero_col].str.strip()
-                player_matches["Rolle"] = player_matches[role_col].str.strip()
-                player_matches["Spieler"] = p
-                hero_data.append(player_matches)
-        temp = pd.concat(hero_data) if hero_data else pd.DataFrame()
-
-    if not temp.empty:
-        temp = temp[temp["Hero"].notna() & (temp["Hero"] != "")]
-
-    return temp
+        if year is not None:
+            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
+        if month is not None:
+            temp = temp[temp["Monat"] == month]
+    role_col, hero_col = f"{player} Rolle", f"{player} Hero"
+    if role_col not in temp.columns or hero_col not in temp.columns:
+        return pd.DataFrame()
+    temp = temp[temp[role_col].notna() & (temp[role_col] != "nicht dabei")]
+    if temp.empty:
+        return pd.DataFrame()
+    temp["Hero"], temp["Rolle"] = temp[hero_col].str.strip(), temp[role_col].str.strip()
+    return temp[temp["Hero"].notna() & (temp["Hero"] != "")]
 
 
 def calculate_winrate(data, group_col):
     if data.empty or group_col not in data.columns:
         return pd.DataFrame(columns=[group_col, "Win", "Lose", "Winrate", "Spiele"])
+    data[group_col] = data[group_col].astype(str).str.strip()
+    data = data[data[group_col].notna() & (data[group_col] != "")]
+    if data.empty:
+        return pd.DataFrame(columns=[group_col, "Win", "Lose", "Winrate", "Spiele"])
+    grouped = data.groupby([group_col, "Win Lose"]).size().unstack(fill_value=0)
+    if "Win" not in grouped:
+        grouped["Win"] = 0
+    if "Lose" not in grouped:
+        grouped["Lose"] = 0
+    grouped["Spiele"] = grouped["Win"] + grouped["Lose"]
+    grouped["Winrate"] = grouped["Win"] / grouped["Spiele"]
+    return grouped.reset_index().sort_values("Winrate", ascending=False)
 
-    # Clean group column
-    data[group_col] = data[group_col].str.strip()
-    data = data[data[group_col].notna()]
-    data = data[data[group_col] != ""]
 
-    grouped = data.groupby([group_col, "Win Lose"]).size().reset_index(name="Anzahl")
-    pivot = grouped.pivot(index=group_col, columns="Win Lose", values="Anzahl").fillna(
-        0
-    )
-    pivot["Winrate"] = pivot["Win"] / (pivot["Win"] + pivot["Lose"])
-    pivot["Spiele"] = pivot["Win"] + pivot["Lose"]
-    pivot = pivot.reset_index()
+def generate_history_layout_simple(games_df):
+    if games_df.empty:
+        return [dbc.Alert("Keine Match History verfügbar.", color="info")]
+    history_items, last_season = [], None
+    for idx, game in games_df.iterrows():
+        if pd.isna(game.get("Map")):
+            continue
+        current_season = game.get("Season")
+        if pd.notna(current_season) and current_season != last_season:
+            match = re.search(r"\d+", str(current_season))
+            season_text = f"Season {match.group(0)}" if match else str(current_season)
+            history_items.append(
+                dbc.Alert(
+                    season_text, color="primary", className="my-4 text-center fw-bold"
+                )
+            )
+            last_season = current_season
+        player_list_items = []
+        for p in constants.players:
+            hero = game.get(f"{p} Hero")
+            if pd.notna(hero) and hero != "nicht dabei":
+                role = game.get(f"{p} Rolle", "N/A")
+                player_list_items.append(
+                    dbc.ListGroupItem(
+                        [
+                            html.Div(p, className="fw-bold"),
+                            html.Div(f"{hero} ({role})", className="text-muted"),
+                        ],
+                        className="d-flex justify-content-between align-items-center",
+                    )
+                )
+        result_color, result_text = (
+            ("success", "VICTORY")
+            if game.get("Win Lose") == "Win"
+            else ("danger", "DEFEAT")
+        )
+        date_str = ""
+        if pd.notna(game.get("Datum")):
+            try:
+                date_str = game["Datum"].strftime("%d.%m.%Y")
+            except AttributeError:
+                date_str = "Invalid Date"
+        map_name, gamemode = game.get("Map", "Unknown Map"), game.get("Gamemode", "")
+        card = dbc.Card(
+            [
+                dbc.CardHeader(
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H5(
+                                        f"{map_name} — {gamemode}", className="mb-0"
+                                    ),
+                                    html.Small(date_str, className="text-muted"),
+                                ]
+                            ),
+                            dbc.Badge(
+                                result_text, color=result_color, className="ms-auto"
+                            ),
+                        ],
+                        className="d-flex justify-content-between align-items-center",
+                    )
+                ),
+                dbc.CardBody(dbc.ListGroup(player_list_items, flush=True)),
+            ],
+            className="mb-3",
+        )
+        history_items.append(card)
+    return history_items
 
-    return pivot.sort_values("Winrate", ascending=False)
+
+# --- Callbacks ---
+@app.callback(
+    Output("dummy-output", "children"),
+    Input("update-data-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def update_data(n_clicks):
+    if n_clicks > 0:
+        load_data(use_local=False)
+    return f"Data updated at {pd.Timestamp.now()}"
 
 
 @app.callback(
-    Output("season-dropdown", "value"),
-    Output("month-dropdown", "value"),
-    Output("year-dropdown", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
+    Output("season-dropdown", "options"),
+    Output("month-dropdown", "options"),
+    Output("year-dropdown", "options"),
+    Input("dummy-output", "children"),
 )
-def sync_time_filters(season, month, year):
-    triggered = ctx.triggered_id
+def update_filter_options(_):
+    if df.empty:
+        return [], [], []
+    season_options = [
+        {"label": s, "value": s}
+        for s in sorted(df["Season"].dropna().unique(), reverse=True)
+    ]
+    month_options = [
+        {"label": m, "value": m} for m in sorted(df["Monat"].dropna().unique())
+    ]
+    year_options = [
+        {"label": str(int(y)), "value": int(y)}
+        for y in sorted(df["Jahr"].dropna().unique())
+    ]
+    return season_options, month_options, year_options
 
-    if triggered == "season-dropdown" and season:
-        return season, None, None
-    elif triggered in ["month-dropdown", "year-dropdown"] and (month or year):
-        return None, month, year
-    return season, month, year
+
+@app.callback(
+    Output("compare-switches-container", "children"), Input("player-dropdown", "value")
+)
+def generate_comparison_switches(selected_player):
+    other_players = [p for p in constants.players if p != selected_player]
+    if not other_players:
+        return None
+    switches = [html.Label("Vergleiche mit:", className="fw-bold")]
+    for player in other_players:
+        switches.append(
+            dbc.Switch(
+                id={"type": "compare-switch", "player": player},
+                label=player,
+                value=False,
+                className="mt-1",
+            )
+        )
+    return switches
+
+
+# --- NEW CALLBACK TO FIX THE BUG ---
+@app.callback(
+    Output({"type": "compare-switch", "player": ALL}, "value"),
+    Input("player-dropdown", "value"),
+    State({"type": "compare-switch", "player": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def reset_compare_switches(selected_player, switch_values):
+    """
+    This callback's only job is to reset all comparison switches to False
+    when the main player is changed, preventing the "ghost state" bug.
+    """
+    # We need to return a list of `False` values, one for each switch.
+    return [False] * len(switch_values)
 
 
 @app.callback(
     Output("map-view-type-container", "style"), Input("map-stat-type", "value")
 )
 def toggle_view_type_visibility(map_stat_type):
-    """Show view type dropdown only for winrate map stats"""
     return {"display": "block"} if map_stat_type == "winrate" else {"display": "none"}
 
 
@@ -486,55 +585,63 @@ def toggle_view_type_visibility(map_stat_type):
     Input("role-stat-type", "value"),
     Input("map-stat-type", "value"),
 )
-def toggle_slider(tab, hero_stat_type, role_stat_type, map_stat_type):
-    # Enable slider only when viewing winrate stats that need it
+def toggle_slider(tab, hero_stat, role_stat, map_stat):
     if (
-        (tab == "tab-hero" and hero_stat_type == "winrate")
-        or (tab == "tab-role" and role_stat_type == "winrate")
-        or (tab == "tab-map" and map_stat_type == "winrate")
+        (tab == "tab-hero" and hero_stat == "winrate")
+        or (tab == "tab-role" and role_stat == "winrate")
+        or (tab == "tab-map" and map_stat in ["winrate", "gamemode", "attackdef"])
     ):
         return False, ""
-    else:
-        return True, "Nur relevant für Winrate-Statistiken"
+    return True, "Nur relevant für Winrate-Statistiken"
 
 
 @app.callback(
-    Output("dummy-output", "children"),
-    Input("update-data-button", "n_clicks"),
-    prevent_initial_call=True,
+    Output("history-list-container", "children"),
+    Output("history-display-count-store", "data"),
+    Input("load-more-history-button", "n_clicks"),
+    Input("dummy-output", "children"),
+    State("history-display-count-store", "data"),
+    State("history-load-amount-dropdown", "value"),
 )
-def update_data(n_clicks):
-    if n_clicks > 0:
-        load_data(use_local=False)
-    return ""
+def update_history_display(n_clicks, _, current_store, load_amount):
+    global df
+    if df.empty:
+        return [dbc.Alert("No data available to show history.", color="danger")], {
+            "count": 10
+        }
+    triggered_id = ctx.triggered_id if ctx.triggered_id else "dummy-output"
+    current_count = current_store.get("count", 10)
+    if triggered_id == "load-more-history-button":
+        new_count = current_count + load_amount
+    else:
+        new_count = 10
+    games_to_show = df.head(new_count)
+    history_layout = generate_history_layout_simple(games_to_show)
+    return history_layout, {"count": new_count}
 
 
 @app.callback(
-    [
-        Output("map-stat-graph", "figure"),
-        Output("hero-stat-graph", "figure"),
-        Output("role-stat-graph", "figure"),
-        Output("performance-heatmap", "figure"),
-        Output("stats-container", "children"),
-        Output("winrate-over-time", "figure"),
-        Output("hero-filter-dropdown", "options"),
-        Output("season-dropdown", "options"),
-        Output("month-dropdown", "options"),
-        Output("year-dropdown", "options"),
-    ],
-    [
-        Input("player-dropdown", "value"),
-        Input("min-games-slider", "value"),
-        Input("season-dropdown", "value"),
-        Input("month-dropdown", "value"),
-        Input("year-dropdown", "value"),
-        Input("hero-filter-dropdown", "value"),
-        Input("hero-stat-type", "value"),
-        Input("role-stat-type", "value"),
-        Input("map-stat-type", "value"),
-        Input("map-view-type", "value"),
-        Input("dummy-output", "children"),  # Trigger when data is updated
-    ],
+    Output("map-stat-graph", "figure"),
+    Output("hero-stat-graph", "figure"),
+    Output("role-stat-graph", "figure"),
+    Output("performance-heatmap", "figure"),
+    Output("stats-header", "children"),
+    Output("stats-container", "children"),
+    Output("winrate-over-time", "figure"),
+    Output("hero-filter-dropdown", "options"),
+    Input("player-dropdown", "value"),
+    Input("min-games-slider", "value"),
+    Input("season-dropdown", "value"),
+    Input("month-dropdown", "value"),
+    Input("year-dropdown", "value"),
+    Input("hero-filter-dropdown", "value"),
+    Input("hero-stat-type", "value"),
+    Input("role-stat-type", "value"),
+    Input("map-stat-type", "value"),
+    Input("map-view-type", "value"),
+    Input({"type": "compare-switch", "player": ALL}, "value"),
+    State({"type": "compare-switch", "player": ALL}, "id"),
+    Input("dummy-output", "children"),
 )
 def update_all_graphs(
     player,
@@ -547,504 +654,277 @@ def update_all_graphs(
     role_stat_type,
     map_stat_type,
     map_view_type,
+    compare_values,
+    compare_ids,
     _,
 ):
-    global df
-
-    temp = filter_data(player, season, month, year)
-    data_all = filter_data("all", season, month, year)
-
-    # Initialize all figures with empty states
-    map_fig = px.bar(title="Keine Daten verfügbar")
-    hero_fig = px.bar(title="Keine Daten verfügbar")
-    role_fig = px.bar(title="Keine Daten verfügbar")
-    stats = html.Div("Keine Daten verfügbar")
-    heatmap_fig = px.imshow([[0]], title="Keine Daten verfügbar")
-    winrate_fig = px.line(title="Keine Daten verfügbar")
-
-    if not temp.empty:
-        # === total game count ===
-        if player == "all":
-            unique_games = data_all
-        else:
-            unique_games = temp
-
-        total_games = unique_games.shape[0]
-        wins = unique_games[unique_games["Win Lose"] == "Win"].shape[0]
-        winrate = wins / total_games if total_games > 0 else 0
-
-        # === Map Statistics ===
-        if map_stat_type == "winrate":
-            map_data = calculate_winrate(temp, "Map")
-            map_data = map_data[map_data["Spiele"] >= min_games]
-
-            if not map_data.empty:
-                if map_view_type and "Attack Def" in temp.columns:
-                    # Detailed view with attack/defense breakdown
-                    attack_def_data = temp[
-                        temp["Attack Def"].isin(["Attack", "Defense"])
-                    ].copy()
-
-                    combined_data = []
-
-                    for map_name in map_data["Map"].unique():
-                        # Overall stats
-                        map_stats = map_data[map_data["Map"] == map_name].iloc[0]
+    dataframes = {player: filter_data(player, season, month, year)}
+    active_compare_players = []
+    if compare_ids:  # compare_ids can be empty on first load
+        for i, is_on in enumerate(compare_values):
+            if is_on:
+                p_name = compare_ids[i]["player"]
+                active_compare_players.append(p_name)
+                dataframes[p_name] = filter_data(p_name, season, month, year)
+    main_df = dataframes[player]
+    title_suffix = f"({player}{' vs ' + ', '.join(active_compare_players) if active_compare_players else ''})"
+    empty_fig = go.Figure(layout={"title": "Keine Daten für die Auswahl verfügbar"})
+    stats_header = f"Gesamtstatistiken ({player})"
+    if not main_df.empty:
+        total, wins = len(main_df), len(main_df[main_df["Win Lose"] == "Win"])
+        losses, winrate = total - wins, wins / total if total > 0 else 0
+        stats_container = dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        [dbc.CardHeader("Gesamtspiele"), dbc.CardBody(f"{total}")],
+                        className="text-center",
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [dbc.CardHeader("Gewonnen"), dbc.CardBody(f"{wins}")],
+                        className="text-center bg-success text-white",
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [dbc.CardHeader("Verloren"), dbc.CardBody(f"{losses}")],
+                        className="text-center bg-danger text-white",
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [dbc.CardHeader("Winrate"), dbc.CardBody(f"{winrate:.0%}")],
+                        className="text-center bg-warning",
+                    ),
+                    width=3,
+                ),
+            ]
+        )
+    else:
+        stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
+    map_fig = go.Figure()
+    if map_stat_type == "winrate" and map_view_type and not active_compare_players:
+        map_data = calculate_winrate(main_df, "Map")
+        map_data = map_data[map_data["Spiele"] >= min_games]
+        if not map_data.empty and "Attack Def" in main_df.columns:
+            attack_def_data = main_df[
+                main_df["Attack Def"].isin(["Attack", "Defense"])
+            ].copy()
+            combined_data = []
+            for _, map_row in map_data.iterrows():
+                map_name = map_row["Map"]
+                combined_data.append(
+                    {
+                        "Map": map_name,
+                        "Mode": "Overall",
+                        "Winrate": map_row["Winrate"],
+                        "Spiele": map_row["Spiele"],
+                    }
+                )
+                map_specific_ad = attack_def_data[attack_def_data["Map"] == map_name]
+                if not map_specific_ad.empty:
+                    ad_stats = calculate_winrate(map_specific_ad, "Attack Def")
+                    for _, row in ad_stats.iterrows():
                         combined_data.append(
                             {
                                 "Map": map_name,
-                                "Mode": "Overall",
-                                "Winrate": map_stats["Winrate"],
-                                "Spiele": map_stats["Spiele"],
-                                "Wins": map_stats["Win"],
-                                "Losses": map_stats["Lose"],
+                                "Mode": row["Attack Def"],
+                                "Winrate": row["Winrate"],
+                                "Spiele": row["Spiele"],
                             }
                         )
-
-                        # Attack/Defense stats
-                        map_specific = attack_def_data[
-                            attack_def_data["Map"] == map_name
-                        ]
-                        if not map_specific.empty:
-                            attack_def_stats = calculate_winrate(
-                                map_specific, "Attack Def"
-                            )
-                            for mode in ["Attack", "Defense"]:
-                                if mode in attack_def_stats["Attack Def"].values:
-                                    mode_stats = attack_def_stats[
-                                        attack_def_stats["Attack Def"] == mode
-                                    ].iloc[0]
-                                    combined_data.append(
-                                        {
-                                            "Map": map_name,
-                                            "Mode": mode,
-                                            "Winrate": mode_stats["Winrate"],
-                                            "Spiele": mode_stats["Spiele"],
-                                            "Wins": mode_stats["Win"],
-                                            "Losses": mode_stats["Lose"],
-                                        }
-                                    )
-
-                    combined_df = pd.DataFrame(combined_data)
-
-                    # Prepare customdata as numpy array to ensure proper alignment
-                    custom_data = combined_df[["Spiele", "Wins", "Losses"]].values
-
-                    # Create the figure
-                    map_fig = px.bar(
-                        combined_df,
-                        x="Map",
-                        y="Winrate",
-                        color="Mode",
-                        barmode="group",
-                        title=f"Map Winrates (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                        color_discrete_map={
-                            "Overall": "#636EFA",
-                            "Attack": "#EF553B",
-                            "Defense": "#00CC96",
-                        },
-                        category_orders={"Mode": ["Overall", "Attack", "Defense"]},
-                    )
-
-                    # Update traces with properly aligned customdata
-                    for i, mode in enumerate(combined_df["Mode"].unique()):
-                        mode_data = combined_df[combined_df["Mode"] == mode]
-                        mode_custom_data = mode_data[
-                            ["Spiele", "Wins", "Losses"]
-                        ].values
-
-                        map_fig.update_traces(
-                            selector={"name": mode},
-                            hovertemplate=(
-                                "<b>%{x}</b> (%{fullData.name})<br>"
-                                "Winrate: %{y:.1%}<br>"
-                                "Spiele: %{customdata[0]}<br>"
-                                "Gewonnen: %{customdata[1]}<br>"
-                                "Verloren: %{customdata[2]}<extra></extra>"
-                            ),
-                            customdata=mode_custom_data,
-                        )
-
-                    map_fig.update_layout(
-                        yaxis_tickformat=".0%",
-                        yaxis_title="Winrate",
-                        xaxis_title="Map",
-                        legend_title="",
-                        hovermode="x unified",
-                    )
-
-                else:
-                    # Simple view
-                    map_fig = px.bar(
-                        map_data,
-                        x="Map",
-                        y="Winrate",
-                        title=f"Winrate nach Map (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                        hover_data={
-                            "Winrate": False,
-                            "Spiele": True,
-                        },
-                        color="Winrate",
-                        color_continuous_scale="RdYlGn",
-                        range_color=[0, 1],
-                    )
-                    map_fig.update_layout(yaxis_tickformat=".0%")
-                    map_fig.update_traces(
-                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
-                        customdata=map_data[["Spiele"]],
-                    )
-            else:
-                map_fig = px.bar(title="Keine Map-Daten verfügbar")
-
-        elif map_stat_type == "plays":
-            # Plays view (no view type toggle)
-            map_counts = (
-                temp.groupby("Map")
-                .size()
-                .reset_index(name="Spiele")
-                .sort_values("Spiele", ascending=False)
-            )
-            if not map_counts.empty:
+            if combined_data:
+                combined_df = pd.DataFrame(combined_data)
                 map_fig = px.bar(
-                    map_counts,
+                    combined_df,
                     x="Map",
-                    y="Spiele",
-                    text="Spiele",
-                    hover_data={
-                        "Spiele": True,
-                    },
-                    title=f"Spiele pro Map ({'Alle Spieler' if player=='all' else player})",
+                    y="Winrate",
+                    color="Mode",
+                    barmode="group",
+                    title=f"Map Winrates (Detailliert) - {player}",
+                    category_orders={"Mode": ["Overall", "Attack", "Defense"]},
+                    custom_data=["Spiele"],
                 )
-                map_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
                 map_fig.update_traces(
-                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
-                    customdata=map_counts[["Spiele"]],
+                    hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>"
                 )
-
-        elif map_stat_type == "gamemode":
-            # Gamemode view (no view type toggle)
-            if "Gamemode" in temp.columns:
-                gamemode_data = calculate_winrate(temp, "Gamemode")
-                gamemode_data = gamemode_data[gamemode_data["Spiele"] >= min_games]
-                if not gamemode_data.empty:
-                    map_fig = px.bar(
-                        gamemode_data,
-                        x="Gamemode",
-                        y="Winrate",
-                        hover_data={
-                            "Winrate": False,
-                            "Spiele": True,
-                        },
-                        title=f"Winrate nach Gamemode (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                        color="Winrate",
-                        color_continuous_scale="RdYlGn",
-                        range_color=[0, 1],
-                    )
-                    map_fig.update_layout(yaxis_tickformat=".0%")
-                    map_fig.update_traces(
-                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
-                        customdata=gamemode_data[["Spiele"]],
-                    )
-
-        elif map_stat_type == "attackdef":
-            # Attack/defense view (no view type toggle)
-            if "Attack Def" in temp.columns:
-                attackdef_data = calculate_winrate(temp, "Attack Def")
-                attackdef_data = attackdef_data[attackdef_data["Spiele"] >= min_games]
-                if not attackdef_data.empty:
-                    map_fig = px.bar(
-                        attackdef_data,
-                        x="Attack Def",
-                        y="Winrate",
-                        title=f"Winrate nach Attack/Defense (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                        color="Winrate",
-                        color_continuous_scale="RdYlGn",
-                        range_color=[0, 1],
-                    )
-                    map_fig.update_layout(yaxis_tickformat=".0%")
-                    map_fig.update_traces(
-                        hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
-                        customdata=attackdef_data[["Spiele"]],
-                    )
-
-        # === Hero Statistics ===
-        if hero_stat_type == "winrate":
-            hero_data = calculate_winrate(temp, "Hero")
-            hero_data = hero_data[hero_data["Spiele"] >= min_games]
-            if not hero_data.empty:
-                hero_fig = px.bar(
-                    hero_data,
-                    x="Hero",
-                    y="Winrate",
-                    title=f"Winrate nach Held (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                    hover_data={
-                        "Winrate": False,
-                        "Spiele": True,
-                    },
-                    color="Winrate",
-                    color_continuous_scale="RdYlGn",
-                    range_color=[0, 1],
-                )
-
-            hero_fig.update_layout(yaxis_tickformat=".0%")
-
-            hero_fig.update_traces(
-                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
-                customdata=hero_data[["Spiele"]],
-            )
+                map_fig.update_layout(yaxis_tickformat=".0%")
+            else:
+                map_fig = empty_fig
         else:
-            hero_counts = (
-                temp.groupby("Hero")
-                .size()
-                .reset_index(name="Spiele")
-                .sort_values("Spiele", ascending=False)
-            )
-            if not hero_counts.empty:
-                hero_fig = px.bar(
-                    hero_counts,
-                    x="Hero",
-                    y="Spiele",
-                    text="Spiele",
-                    title=f"Spiele pro Held ({'Alle Spieler' if player=='all' else player})",
-                )
-                hero_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
-                hero_fig.update_traces(
-                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
-                    customdata=hero_counts[["Spiele"]],
-                )
+            map_fig = empty_fig
+    else:
+        group_col = {
+            "winrate": "Map",
+            "plays": "Map",
+            "gamemode": "Gamemode",
+            "attackdef": "Attack Def",
+        }.get(map_stat_type)
+        y_col = (
+            "Winrate"
+            if map_stat_type in ["winrate", "gamemode", "attackdef"]
+            else "Spiele"
+        )
+        for name, df_to_plot in dataframes.items():
+            if not df_to_plot.empty and group_col and group_col in df_to_plot.columns:
+                if y_col == "Winrate":
+                    stats = calculate_winrate(df_to_plot, group_col)
+                    stats = stats[stats["Spiele"] >= min_games]
+                    if not stats.empty:
+                        map_fig.add_trace(
+                            go.Bar(
+                                x=stats[group_col],
+                                y=stats[y_col],
+                                name=name,
+                                customdata=stats[["Spiele"]],
+                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                            )
+                        )
+                else:
+                    stats = (
+                        df_to_plot.groupby(group_col)
+                        .size()
+                        .reset_index(name="Spiele")
+                        .sort_values("Spiele", ascending=False)
+                    )
+                    if not stats.empty:
+                        map_fig.add_trace(
+                            go.Bar(
+                                x=stats[group_col],
+                                y=stats[y_col],
+                                name=name,
+                                hovertemplate="<b>%{x}</b><br>Spiele: %{y}<extra></extra>",
+                            )
+                        )
+        map_fig.update_layout(
+            title=f"{map_stat_type.title().replace('def', 'Def')} nach {group_col} {title_suffix}",
+            barmode="group",
+            yaxis_title=y_col,
+            legend_title="Spieler",
+        )
+        if y_col == "Winrate":
+            map_fig.update_layout(yaxis_tickformat=".0%")
+        if not map_fig.data:
+            map_fig = empty_fig
 
-        # === Role Statistics ===
-        if role_stat_type == "winrate":
-            role_data = calculate_winrate(temp, "Rolle")
-            role_data = role_data[role_data["Spiele"] >= min_games]
-            if not role_data.empty:
-                role_fig = px.bar(
-                    role_data,
-                    x="Rolle",
-                    y="Winrate",
-                    title=f"Winrate nach Rolle (min. {min_games} Spiele) ({player if player != 'all' else 'Alle Spieler'})",
-                    hover_data={
-                        "Winrate": False,
-                        "Spiele": True,
-                    },
-                    color="Winrate",
-                    color_continuous_scale="RdYlGn",
-                    range_color=[0, 1],
-                )
-                role_fig.update_layout(yaxis_tickformat=".0%")
-                role_fig.update_traces(
-                    hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
-                    customdata=role_data[["Spiele"]],
-                )
-        else:
-            role_counts = (
-                temp.groupby("Rolle")
-                .size()
-                .reset_index(name="Spiele")
-                .sort_values("Spiele", ascending=False)
-            )
-            if not role_counts.empty:
-                role_fig = px.bar(
-                    role_counts,
-                    x="Rolle",
-                    y="Spiele",
-                    text="Spiele",
-                    title=f"Spiele pro Rolle ({'Alle Spieler' if player=='all' else player})",
-                )
-                role_fig.update_layout(xaxis_title="", yaxis_title="Spiele")
-                role_fig.update_traces(
-                    hovertemplate="Spiele: %{customdata[0]}<extra></extra>",
-                    customdata=role_counts[["Spiele"]],
-                )
+    def create_comparison_fig(stat_type, group_col):
+        fig = go.Figure()
+        y_col = "Winrate" if stat_type == "winrate" else "Spiele"
+        for name, df_to_plot in dataframes.items():
+            if not df_to_plot.empty:
+                if y_col == "Winrate":
+                    stats = calculate_winrate(df_to_plot, group_col)
+                    stats = stats[stats["Spiele"] >= min_games]
+                    if not stats.empty:
+                        fig.add_trace(
+                            go.Bar(
+                                x=stats[group_col],
+                                y=stats[y_col],
+                                name=name,
+                                customdata=stats[["Spiele"]],
+                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
+                            )
+                        )
+                else:
+                    stats = (
+                        df_to_plot.groupby(group_col)
+                        .size()
+                        .reset_index(name="Spiele")
+                        .sort_values("Spiele", ascending=False)
+                    )
+                    if not stats.empty:
+                        fig.add_trace(
+                            go.Bar(
+                                x=stats[group_col],
+                                y=stats[y_col],
+                                name=name,
+                                hovertemplate="<b>%{x}</b><br>Spiele: %{y}<extra></extra>",
+                            )
+                        )
+        fig.update_layout(
+            title=f"{stat_type.title()} nach {group_col} {title_suffix}",
+            barmode="group",
+            yaxis_title=y_col,
+            legend_title="Spieler",
+        )
+        if y_col == "Winrate":
+            fig.update_layout(yaxis_tickformat=".0%")
+        return fig if fig.data else empty_fig
 
-        # === Performance Heatmap: Role × Map Winrate ===
-        if not temp.empty:
-            # Create winrate pivot table
-            winrate_pivot = temp.pivot_table(
+    hero_fig = create_comparison_fig(hero_stat_type, "Hero")
+    role_fig = create_comparison_fig(role_stat_type, "Rolle")
+    heatmap_fig = empty_fig
+    if not main_df.empty:
+        try:
+            pivot = main_df.pivot_table(
                 index="Rolle",
                 columns="Map",
                 values="Win Lose",
-                aggfunc=lambda x: (x == "Win").sum() / len(x),
-            ).fillna(0)
-
-            # Create game count pivot table
-            count_pivot = temp.pivot_table(
-                index="Rolle",
-                columns="Map",
-                values="Win Lose",
-                aggfunc="count",
-            ).fillna(0)
-
-            if not winrate_pivot.empty:
-                # Create a list of lists for custom data containing both winrate and count
-                custom_data = []
-                for i in range(len(winrate_pivot)):
-                    row = []
-                    for j in range(len(winrate_pivot.columns)):
-                        row.append([winrate_pivot.iloc[i, j], count_pivot.iloc[i, j]])
-                    custom_data.append(row)
-
+                aggfunc=lambda x: (x == "Win").sum() / len(x) if len(x) > 0 else 0,
+            )
+            if not pivot.empty:
                 heatmap_fig = px.imshow(
-                    winrate_pivot,
+                    pivot,
                     text_auto=".0%",
                     color_continuous_scale="RdYlGn",
                     zmin=0,
                     zmax=1,
                     aspect="auto",
-                    title=f"Winrate Heatmap – {player if player != 'all' else 'Alle Spieler'}",
+                    title=f"Winrate Heatmap – {player}",
                 )
-
-                # Add custom data to the figure
-                heatmap_fig.data[0].customdata = custom_data
-                heatmap_fig.data[0].hovertemplate = (
-                    "<b>Role:</b> %{y}<br>"
-                    "<b>Map:</b> %{x}<br>"
-                    "<b>Winrate:</b> %{z:.1%}<br>"
-                    "<b>Games Played:</b> %{customdata[1]:,}<extra></extra>"
+        except Exception:
+            pass
+    winrate_fig = go.Figure()
+    for name, df_to_plot in dataframes.items():
+        if not df_to_plot.empty and "Datum" in df_to_plot.columns:
+            time_data = df_to_plot.dropna(subset=["Datum"]).copy()
+            time_data.sort_values("Datum", inplace=True, ascending=True)
+            if hero_filter:
+                time_data = time_data[time_data["Hero"] == hero_filter]
+            if not time_data.empty:
+                time_data["Win"] = (time_data["Win Lose"] == "Win").astype(int)
+                time_data["GameNum"] = range(1, len(time_data) + 1)
+                time_data["CumulativeWinrate"] = (
+                    time_data["Win"].cumsum() / time_data["GameNum"]
                 )
-
-                heatmap_fig.update_layout(
-                    xaxis_title="Map",
-                    yaxis_title="Rolle",
-                    margin=dict(l=40, r=20, t=60, b=40),
+                winrate_fig.add_trace(
+                    go.Scatter(
+                        x=time_data["GameNum"],
+                        y=time_data["CumulativeWinrate"],
+                        mode="lines",
+                        name=name,
+                    )
                 )
-
-    # === Dropdown-Optionen für Held ===
+    winrate_fig.update_layout(
+        title=f"Winrate-Verlauf {title_suffix}",
+        yaxis_tickformat=".0%",
+        yaxis_title="Winrate",
+        xaxis_title="Spielnummer",
+        legend_title="Spieler",
+    )
+    if not winrate_fig.data:
+        winrate_fig = empty_fig
     hero_options = (
-        [{"label": h, "value": h} for h in sorted(temp["Hero"].dropna().unique())]
-        if not temp.empty
+        [{"label": h, "value": h} for h in sorted(main_df["Hero"].dropna().unique())]
+        if not main_df.empty
         else []
     )
-
-    # === Time filter options ===
-    season_options = (
-        [{"label": s, "value": s} for s in sorted(df["Season"].dropna().unique())]
-        if not df.empty
-        else []
-    )
-
-    month_options = (
-        [
-            {"label": monat, "value": monat}
-            for monat in sorted(df["Monat"].dropna().unique())
-        ]
-        if not df.empty
-        else []
-    )
-
-    year_options = (
-        [
-            {"label": str(int(jahr)), "value": int(jahr)}
-            for jahr in sorted(df["Jahr"].dropna().unique())
-        ]
-        if not df.empty
-        else []
-    )
-
-    # === Winrate Over Time ===
-    if not temp.empty:
-        time_data = temp.copy()
-
-        if hero_filter:
-            time_data = time_data[time_data["Hero"] == hero_filter]
-
-        if not time_data.empty:
-            time_data = time_data.sort_values("Datum").reset_index(drop=True)
-            time_data["WinBinary"] = (time_data["Win Lose"] == "Win").astype(int)
-            time_data["GameNumber"] = range(1, len(time_data) + 1)
-            time_data["CumulativeWins"] = time_data["WinBinary"].cumsum()
-            time_data["CumulativeWinrate"] = (
-                time_data["CumulativeWins"] / time_data["GameNumber"]
-            )
-
-            winrate_fig = px.line(
-                time_data,
-                x="GameNumber",
-                y="CumulativeWinrate",
-                title=f"Winrate-Verlauf ({'Held: ' + hero_filter if hero_filter else player})",
-            )
-            winrate_fig.update_layout(
-                yaxis_tickformat=".0%", yaxis_title="Winrate", xaxis_title="Spielnummer"
-            )
-            winrate_fig.update_traces(
-                hovertemplate="<b>Gamenumber: %{x}</b><br>Winrate: %{y:.1%}<br>Hero: %{customdata[0]}<extra></extra>",
-                customdata=time_data[["Hero"]],
-            )
-
-    if not data_all.empty:
-        # === Corrected total game count using Match ID ===
-        total_games = data_all["Match ID"].nunique()
-        wins = data_all[data_all["Win Lose"] == "Win"]["Match ID"].nunique()
-        losses = data_all[data_all["Win Lose"] == "Lose"]["Match ID"].nunique()
-
-        # === Statistics ===
-        stats = dbc.Row(
-            [
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader(
-                                "Gesamtspiele", className="bg-info text-white"
-                            ),
-                            dbc.CardBody(f"{total_games}"),
-                        ],
-                        className="text-center",
-                    ),
-                    width=3,
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader(
-                                "Gewonnen", className="bg-success text-white"
-                            ),
-                            dbc.CardBody(f"{wins}"),
-                        ],
-                        className="text-center",
-                    ),
-                    width=3,
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader(
-                                "Verloren", className="bg-danger text-white"
-                            ),
-                            dbc.CardBody(f"{losses}"),
-                        ],
-                        className="text-center",
-                    ),
-                    width=3,
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader(
-                                "Winrate", className="bg-warning text-white"
-                            ),
-                            dbc.CardBody(f"{winrate:.0%}"),
-                        ],
-                        className="text-center",
-                    ),
-                    width=3,
-                ),
-            ],
-            className="mb-2",
-        )
-
     return (
         map_fig,
         hero_fig,
         role_fig,
         heatmap_fig,
-        stats,
+        stats_header,
+        stats_container,
         winrate_fig,
         hero_options,
-        season_options,
-        month_options,
-        year_options,
     )
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(debug=True)
