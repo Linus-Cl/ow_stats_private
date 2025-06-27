@@ -67,7 +67,7 @@ def load_data(use_local=True):
 load_data(use_local=True)
 
 
-# --- Layout (Unchanged) ---
+# --- Layout ---
 app.layout = dbc.Container(
     [
         dcc.Store(id="history-display-count-store", data={"count": 10}),
@@ -232,7 +232,7 @@ app.layout = dbc.Container(
                                                 ),
                                             ]
                                         ),
-                                        dcc.Graph(id="map-stat-graph"),
+                                        html.Div(id="map-stat-container"),
                                     ],
                                 ),
                                 dbc.Tab(
@@ -412,7 +412,7 @@ def filter_data(player, season=None, month=None, year=None):
 
 
 def calculate_winrate(data, group_col):
-    if data.empty or group_col not in data.columns:
+    if data.empty or not isinstance(group_col, str) or group_col not in data.columns:
         return pd.DataFrame(columns=[group_col, "Win", "Lose", "Winrate", "Spiele"])
     data[group_col] = data[group_col].astype(str).str.strip()
     data = data[data[group_col].notna() & (data[group_col] != "")]
@@ -554,7 +554,6 @@ def generate_comparison_switches(selected_player):
     return switches
 
 
-# --- NEW CALLBACK TO FIX THE BUG ---
 @app.callback(
     Output({"type": "compare-switch", "player": ALL}, "value"),
     Input("player-dropdown", "value"),
@@ -562,11 +561,6 @@ def generate_comparison_switches(selected_player):
     prevent_initial_call=True,
 )
 def reset_compare_switches(selected_player, switch_values):
-    """
-    This callback's only job is to reset all comparison switches to False
-    when the main player is changed, preventing the "ghost state" bug.
-    """
-    # We need to return a list of `False` values, one for each switch.
     return [False] * len(switch_values)
 
 
@@ -574,7 +568,9 @@ def reset_compare_switches(selected_player, switch_values):
     Output("map-view-type-container", "style"), Input("map-stat-type", "value")
 )
 def toggle_view_type_visibility(map_stat_type):
-    return {"display": "block"} if map_stat_type == "winrate" else {"display": "none"}
+    if map_stat_type in ["winrate", "plays"]:
+        return {"display": "block"}
+    return {"display": "none"}
 
 
 @app.callback(
@@ -606,7 +602,7 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
 def update_history_display(n_clicks, _, current_store, load_amount):
     global df
     if df.empty:
-        return [dbc.Alert("No data available to show history.", color="danger")], {
+        return [dbc.Alert("Keine Match History verfügbar.", color="danger")], {
             "count": 10
         }
     triggered_id = ctx.triggered_id if ctx.triggered_id else "dummy-output"
@@ -621,7 +617,8 @@ def update_history_display(n_clicks, _, current_store, load_amount):
 
 
 @app.callback(
-    Output("map-stat-graph", "figure"),
+    # --- MODIFICATION START: Updated outputs ---
+    Output("map-stat-container", "children"),
     Output("hero-stat-graph", "figure"),
     Output("role-stat-graph", "figure"),
     Output("performance-heatmap", "figure"),
@@ -629,6 +626,7 @@ def update_history_display(n_clicks, _, current_store, load_amount):
     Output("stats-container", "children"),
     Output("winrate-over-time", "figure"),
     Output("hero-filter-dropdown", "options"),
+    # --- MODIFICATION END ---
     Input("player-dropdown", "value"),
     Input("min-games-slider", "value"),
     Input("season-dropdown", "value"),
@@ -660,7 +658,7 @@ def update_all_graphs(
 ):
     dataframes = {player: filter_data(player, season, month, year)}
     active_compare_players = []
-    if compare_ids:  # compare_ids can be empty on first load
+    if compare_ids:
         for i, is_on in enumerate(compare_values):
             if is_on:
                 p_name = compare_ids[i]["player"]
@@ -707,58 +705,108 @@ def update_all_graphs(
         )
     else:
         stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
-    map_fig = go.Figure()
-    if map_stat_type == "winrate" and map_view_type and not active_compare_players:
-        map_data = calculate_winrate(main_df, "Map")
-        map_data = map_data[map_data["Spiele"] >= min_games]
-        if not map_data.empty and "Attack Def" in main_df.columns:
-            attack_def_data = main_df[
-                main_df["Attack Def"].isin(["Attack", "Defense"])
-            ].copy()
-            combined_data = []
-            for _, map_row in map_data.iterrows():
-                map_name = map_row["Map"]
-                combined_data.append(
-                    {
-                        "Map": map_name,
-                        "Mode": "Overall",
-                        "Winrate": map_row["Winrate"],
-                        "Spiele": map_row["Spiele"],
-                    }
+
+    # --- MODIFICATION START: New dynamic layout logic for Map Tab ---
+    map_stat_output = None
+    attack_def_modes = ["Attack", "Defense", "Attack Attack"]
+
+    # --- Generate Bar Chart ---
+    bar_fig = go.Figure()
+    if (
+        map_view_type
+        and not active_compare_players
+        and map_stat_type in ["winrate", "plays"]
+    ):
+        if map_stat_type == "winrate":
+            # Corrected detailed winrate logic
+            map_data = calculate_winrate(main_df, "Map")
+            map_data = map_data[map_data["Spiele"] >= min_games]
+            if not map_data.empty:
+                plot_df = main_df[main_df["Attack Def"].isin(attack_def_modes)].copy()
+                plot_df["Mode"] = plot_df["Attack Def"].replace(
+                    {"Attack Attack": "Gesamt"}
                 )
-                map_specific_ad = attack_def_data[attack_def_data["Map"] == map_name]
-                if not map_specific_ad.empty:
-                    ad_stats = calculate_winrate(map_specific_ad, "Attack Def")
-                    for _, row in ad_stats.iterrows():
-                        combined_data.append(
-                            {
-                                "Map": map_name,
-                                "Mode": row["Attack Def"],
-                                "Winrate": row["Winrate"],
-                                "Spiele": row["Spiele"],
-                            }
-                        )
-            if combined_data:
-                combined_df = pd.DataFrame(combined_data)
-                map_fig = px.bar(
-                    combined_df,
-                    x="Map",
-                    y="Winrate",
-                    color="Mode",
-                    barmode="group",
-                    title=f"Map Winrates (Detailliert) - {player}",
-                    category_orders={"Mode": ["Overall", "Attack", "Defense"]},
-                    custom_data=["Spiele"],
+
+                grouped = (
+                    plot_df.groupby(["Map", "Mode", "Win Lose"])
+                    .size()
+                    .unstack(fill_value=0)
                 )
-                map_fig.update_traces(
-                    hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>"
-                )
-                map_fig.update_layout(yaxis_tickformat=".0%")
+                if "Win" not in grouped:
+                    grouped["Win"] = 0
+                if "Lose" not in grouped:
+                    grouped["Lose"] = 0
+                grouped["Spiele"] = grouped["Win"] + grouped["Lose"]
+                grouped["Winrate"] = grouped["Win"] / grouped["Spiele"]
+                plot_data = grouped.reset_index()
+
+                plot_data = plot_data[plot_data["Map"].isin(map_data["Map"])]
+
+                if not plot_data.empty:
+                    bar_fig = px.bar(
+                        plot_data,
+                        x="Map",
+                        y="Winrate",
+                        color="Mode",
+                        barmode="group",
+                        title=f"Map Winrates (Detailliert) - {player}",
+                        category_orders={
+                            "Map": map_data["Map"].tolist(),
+                            "Mode": ["Gesamt", "Attack", "Defense"],
+                        },
+                        custom_data=["Spiele"],
+                        color_discrete_map={
+                            "Gesamt": "lightslategrey",
+                            "Attack": "#EF553B",
+                            "Defense": "#636EFA",
+                        },
+                    )
+                    bar_fig.update_traces(
+                        hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>"
+                    )
+                    bar_fig.update_layout(yaxis_tickformat=".0%")
+                else:
+                    bar_fig = empty_fig
             else:
-                map_fig = empty_fig
-        else:
-            map_fig = empty_fig
-    else:
+                bar_fig = empty_fig
+
+        elif map_stat_type == "plays":
+            if not main_df.empty:
+                plot_df = main_df.copy()
+                plot_df["Seite"] = plot_df["Attack Def"].apply(
+                    lambda x: x if x in attack_def_modes else "Andere Modi"
+                )
+                plays_by_side = (
+                    plot_df.groupby(["Map", "Seite"]).size().reset_index(name="Spiele")
+                )
+                total_plays_map = (
+                    main_df.groupby("Map")
+                    .size()
+                    .reset_index(name="TotalSpiele")
+                    .sort_values("TotalSpiele", ascending=False)
+                )
+                bar_fig = px.bar(
+                    plays_by_side,
+                    x="Map",
+                    y="Spiele",
+                    color="Seite",
+                    barmode="stack",
+                    title=f"Spiele pro Map (Detailliert) - {player}",
+                    labels={"Spiele": "Anzahl Spiele", "Seite": "Seite"},
+                    category_orders={"Map": list(total_plays_map["Map"])},
+                    color_discrete_map={
+                        "Attack": "#EF553B",
+                        "Defense": "#636EFA",
+                        "Attack Attack": "#FECB52",
+                        "Andere Modi": "#00CC96",
+                    },
+                )
+                bar_fig.update_traces(
+                    hovertemplate="<b>%{x}</b><br>%{fullData.name}: %{y}<extra></extra>"
+                )
+            else:
+                bar_fig = empty_fig
+    else:  # Standard, non-detailed view
         group_col = {
             "winrate": "Map",
             "plays": "Map",
@@ -776,7 +824,7 @@ def update_all_graphs(
                     stats = calculate_winrate(df_to_plot, group_col)
                     stats = stats[stats["Spiele"] >= min_games]
                     if not stats.empty:
-                        map_fig.add_trace(
+                        bar_fig.add_trace(
                             go.Bar(
                                 x=stats[group_col],
                                 y=stats[y_col],
@@ -793,7 +841,7 @@ def update_all_graphs(
                         .sort_values("Spiele", ascending=False)
                     )
                     if not stats.empty:
-                        map_fig.add_trace(
+                        bar_fig.add_trace(
                             go.Bar(
                                 x=stats[group_col],
                                 y=stats[y_col],
@@ -801,16 +849,54 @@ def update_all_graphs(
                                 hovertemplate="<b>%{x}</b><br>Spiele: %{y}<extra></extra>",
                             )
                         )
-        map_fig.update_layout(
+        bar_fig.update_layout(
             title=f"{map_stat_type.title().replace('def', 'Def')} nach {group_col} {title_suffix}",
             barmode="group",
             yaxis_title=y_col,
             legend_title="Spieler",
         )
         if y_col == "Winrate":
-            map_fig.update_layout(yaxis_tickformat=".0%")
-        if not map_fig.data:
-            map_fig = empty_fig
+            bar_fig.update_layout(yaxis_tickformat=".0%")
+        if not bar_fig.data:
+            bar_fig = empty_fig
+
+    # --- Assemble final layout for the map tab ---
+    if map_stat_type == "winrate":
+        map_stat_output = dbc.Row(dbc.Col(dcc.Graph(figure=bar_fig), width=12))
+    else:
+        pie_fig = go.Figure()
+        pie_data_col = None
+        if map_stat_type == "plays":
+            pie_data_col = "Map"
+        elif map_stat_type == "gamemode":
+            pie_data_col = "Gamemode"
+        elif map_stat_type == "attackdef":
+            pie_data_col = "Attack Def"
+
+        if pie_data_col:
+            pie_data = main_df.copy()
+            # Filter for Attack/Def pie
+            if pie_data_col == "Attack Def":
+                pie_data = pie_data[pie_data["Attack Def"].isin(attack_def_modes)]
+
+            pie_data = pie_data.groupby(pie_data_col).size().reset_index(name="Spiele")
+            if not pie_data.empty:
+                pie_fig = px.pie(
+                    pie_data,
+                    names=pie_data_col,
+                    values="Spiele",
+                    title=f"Verteilung {pie_data_col}",
+                )
+            else:
+                pie_fig = empty_fig
+
+        map_stat_output = dbc.Row(
+            [
+                dbc.Col(dcc.Graph(figure=bar_fig), width=7),
+                dbc.Col(dcc.Graph(figure=pie_fig), width=5),
+            ]
+        )
+    # --- MODIFICATION END ---
 
     def create_comparison_fig(stat_type, group_col):
         fig = go.Figure()
@@ -914,8 +1000,9 @@ def update_all_graphs(
         if not main_df.empty
         else []
     )
+
     return (
-        map_fig,
+        map_stat_output,
         hero_fig,
         role_fig,
         heatmap_fig,
