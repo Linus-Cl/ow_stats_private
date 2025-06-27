@@ -63,7 +63,6 @@ def load_data(use_local=True):
             print("Warning: 'Match ID' column not found. History may not be in order.")
 
 
-# Initial data load
 load_data(use_local=True)
 
 
@@ -388,7 +387,7 @@ app.layout = dbc.Container(
 )
 
 
-# --- Helper Functions (Unchanged) ---
+# --- Helper Functions ---
 def filter_data(player, season=None, month=None, year=None):
     global df
     if df.empty:
@@ -617,7 +616,6 @@ def update_history_display(n_clicks, _, current_store, load_amount):
 
 
 @app.callback(
-    # --- MODIFICATION START: Updated outputs ---
     Output("map-stat-container", "children"),
     Output("hero-stat-graph", "figure"),
     Output("role-stat-graph", "figure"),
@@ -626,7 +624,7 @@ def update_history_display(n_clicks, _, current_store, load_amount):
     Output("stats-container", "children"),
     Output("winrate-over-time", "figure"),
     Output("hero-filter-dropdown", "options"),
-    # --- MODIFICATION END ---
+
     Input("player-dropdown", "value"),
     Input("min-games-slider", "value"),
     Input("season-dropdown", "value"),
@@ -706,11 +704,9 @@ def update_all_graphs(
     else:
         stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
 
-    # --- MODIFICATION START: New dynamic layout logic for Map Tab ---
     map_stat_output = None
     attack_def_modes = ["Attack", "Defense", "Attack Attack"]
 
-    # --- Generate Bar Chart ---
     bar_fig = go.Figure()
     if (
         map_view_type
@@ -718,7 +714,7 @@ def update_all_graphs(
         and map_stat_type in ["winrate", "plays"]
     ):
         if map_stat_type == "winrate":
-            # Corrected detailed winrate logic
+            # winrate logic
             map_data = calculate_winrate(main_df, "Map")
             map_data = map_data[map_data["Spiele"] >= min_games]
             if not map_data.empty:
@@ -875,7 +871,6 @@ def update_all_graphs(
 
         if pie_data_col:
             pie_data = main_df.copy()
-            # Filter for Attack/Def pie
             if pie_data_col == "Attack Def":
                 pie_data = pie_data[pie_data["Attack Def"].isin(attack_def_modes)]
 
@@ -896,7 +891,6 @@ def update_all_graphs(
                 dbc.Col(dcc.Graph(figure=pie_fig), width=5),
             ]
         )
-    # --- MODIFICATION END ---
 
     def create_comparison_fig(stat_type, group_col):
         fig = go.Figure()
@@ -1014,4 +1008,4 @@ def update_all_graphs(
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
