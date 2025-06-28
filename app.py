@@ -624,7 +624,6 @@ def update_history_display(n_clicks, _, current_store, load_amount):
     Output("stats-container", "children"),
     Output("winrate-over-time", "figure"),
     Output("hero-filter-dropdown", "options"),
-
     Input("player-dropdown", "value"),
     Input("min-games-slider", "value"),
     Input("season-dropdown", "value"),
@@ -792,9 +791,8 @@ def update_all_graphs(
                     category_orders={"Map": list(total_plays_map["Map"])},
                     color_discrete_map={
                         "Attack": "#EF553B",
-                        "Defense": "#636EFA",
-                        "Attack Attack": "#FECB52",
-                        "Andere Modi": "#00CC96",
+                        "Defense": "#00CC96",
+                        "Attack Attack": "#636EFA",
                     },
                 )
                 bar_fig.update_traces(
@@ -862,9 +860,8 @@ def update_all_graphs(
     else:
         pie_fig = go.Figure()
         pie_data_col = None
-        if map_stat_type == "plays":
-            pie_data_col = "Map"
-        elif map_stat_type == "gamemode":
+
+        if map_stat_type == "gamemode":
             pie_data_col = "Gamemode"
         elif map_stat_type == "attackdef":
             pie_data_col = "Attack Def"
@@ -882,15 +879,25 @@ def update_all_graphs(
                     values="Spiele",
                     title=f"Verteilung {pie_data_col}",
                 )
+                pie_fig.update_traces(
+                    hovertemplate="<b>%{label}</b><br>Spiele: %{value}<br>Anteil: %{percent}<extra></extra>"
+                )
             else:
                 pie_fig = empty_fig
 
-        map_stat_output = dbc.Row(
-            [
-                dbc.Col(dcc.Graph(figure=bar_fig), width=7),
-                dbc.Col(dcc.Graph(figure=pie_fig), width=5),
-            ]
-        )
+        if map_stat_type == "plays":
+            map_stat_output = dbc.Row(
+                [
+                    dbc.Col(dcc.Graph(figure=bar_fig), width=12),
+                ]
+            )
+        else:
+            map_stat_output = dbc.Row(
+                [
+                    dbc.Col(dcc.Graph(figure=bar_fig), width=7),
+                    dbc.Col(dcc.Graph(figure=pie_fig), width=5),
+                ]
+            )
 
     def create_comparison_fig(stat_type, group_col):
         fig = go.Figure()
@@ -957,6 +964,9 @@ def update_all_graphs(
                     aspect="auto",
                     title=f"Winrate Heatmap – {player}",
                 )
+                heatmap_fig.update_traces(
+                    hovertemplate="<b>Map: %{x}</b><br><b>Rolle: %{y}</b><br><b>Winrate: %{z: .1%}</b><extra></extra>"
+                )
         except Exception:
             pass
     winrate_fig = go.Figure()
@@ -986,6 +996,9 @@ def update_all_graphs(
         yaxis_title="Winrate",
         xaxis_title="Spielnummer",
         legend_title="Spieler",
+    )
+    winrate_fig.update_traces(
+        hovertemplate="<b>Spielnummer: %{x}</b><br><b>Winrate: %{y: .1%}</b><extra></extra>"
     )
     if not winrate_fig.data:
         winrate_fig = empty_fig
