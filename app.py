@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 import requests
 from io import StringIO
 import re
+import os
 
 # --- Local Imports ---
 import constants
@@ -388,6 +389,117 @@ app.layout = dbc.Container(
 
 
 # --- Helper Functions ---
+
+
+def get_map_image_url(map_name):
+    """
+    Generates a URL for a map's background image.
+    Assumes images are in 'assets/maps/' and named like 'map_name.png'.
+    """
+    if not isinstance(map_name, str):
+        return "/assets/maps/default.jpg"  # Fallback for non-string input
+
+    # Clean the map name to create a valid filename
+    # e.g., "King's Row" -> "kings_row"
+    cleaned_name = map_name.lower().replace(" ", "_").replace("'", "")
+
+    # Check for both .jpg and .png extensions
+    for ext in [".jpg", ".png"]:
+        image_filename = f"{cleaned_name}{ext}"
+        # The path Dash uses to serve from the assets folder
+        asset_path = f"/assets/maps/{image_filename}"
+        # The actual file system path to check if the file exists
+        local_path = os.path.join("assets", "maps", image_filename)
+
+        if os.path.exists(local_path):
+            return asset_path
+
+    # If no specific image is found, return the default
+    return "/assets/maps/default.png"
+
+
+def get_hero_image_url(hero_name):
+    """
+    Generates a URL for a hero's portrait with more robust, flexible checking.
+    It tries multiple common filename variations and checks for both .png and .jpg.
+    """
+    if not isinstance(hero_name, str):
+        return "/assets/heroes/default_hero.png"
+
+    base_name = hero_name.lower()
+
+    # --- Create a list of potential filenames to try ---
+    potential_names = []
+
+    # 1. Standard cleaning (e.g., "d.va" -> "dva", "lúcio" -> "lucio")
+    cleaned_base = base_name.replace(".", "").replace(":", "").replace("ú", "u")
+
+    # 2. Add variations for spaces (e.g., "soldier 76" -> "soldier_76" AND "soldier76")
+    potential_names.append(cleaned_base.replace(" ", "_"))
+    potential_names.append(cleaned_base.replace(" ", ""))
+
+    # 3. Add a super-aggressive cleaning as a final fallback (removes all non-letters/numbers)
+    potential_names.append(re.sub(r"[^a-z0-9]", "", base_name))
+
+    # Remove any duplicate names that may have been generated
+    potential_names = list(set(potential_names))
+
+    # --- Now, check if a file exists for any of these variations ---
+    for name in potential_names:
+        if not name:
+            continue  # Skip if cleaning resulted in an empty string
+
+        for ext in [".png", ".jpg", ".jpeg"]:  # Check for all common image extensions
+            image_filename = f"{name}{ext}"
+            asset_path = f"/assets/heroes/{image_filename}"
+            local_path = os.path.join("assets", "heroes", image_filename)
+
+            if os.path.exists(local_path):
+                # We found a match! Return it immediately.
+                return asset_path
+
+    # If after all that, we still can't find it, return the default.
+    return "/assets/heroes/default_hero.png"
+
+
+def create_stat_card(title, image_url, main_text, sub_text):
+    """
+    Erstellt eine einzelne, schön formatierte Statistik-Karte.
+    """
+    return dbc.Col(
+        dbc.Card(
+            [
+                dbc.CardHeader(title),
+                dbc.CardBody(
+                    html.Div(
+                        [
+                            html.Img(
+                                src=image_url,
+                                style={
+                                    "width": "60px",
+                                    "height": "60px",
+                                    "objectFit": "cover",
+                                    "borderRadius": "8px",
+                                    "marginRight": "15px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.H5(main_text, className="mb-0"),
+                                    html.Small(sub_text, className="text-muted"),
+                                ]
+                            ),
+                        ],
+                        className="d-flex align-items-center",
+                    )
+                ),
+            ],
+            className="h-100",  # Stellt sicher, dass alle Karten in einer Reihe die gleiche Höhe haben
+        ),
+        md=3,
+    )
+
+
 def filter_data(player, season=None, month=None, year=None):
     global df
     if df.empty:
@@ -430,71 +542,139 @@ def calculate_winrate(data, group_col):
 def generate_history_layout_simple(games_df):
     if games_df.empty:
         return [dbc.Alert("Keine Match History verfügbar.", color="info")]
-    history_items, last_season = [], None
+
+    history_items = []
+    last_season = None
+
     for idx, game in games_df.iterrows():
         if pd.isna(game.get("Map")):
             continue
+
         current_season = game.get("Season")
         if pd.notna(current_season) and current_season != last_season:
             match = re.search(r"\d+", str(current_season))
             season_text = f"Season {match.group(0)}" if match else str(current_season)
             history_items.append(
                 dbc.Alert(
-                    season_text, color="primary", className="my-4 text-center fw-bold"
+                    season_text, color="secondary", className="my-4 text-center fw-bold"
                 )
             )
             last_season = current_season
-        player_list_items = []
-        for p in constants.players:
-            hero = game.get(f"{p} Hero")
-            if pd.notna(hero) and hero != "nicht dabei":
-                role = game.get(f"{p} Rolle", "N/A")
-                player_list_items.append(
-                    dbc.ListGroupItem(
-                        [
-                            html.Div(p, className="fw-bold"),
-                            html.Div(f"{hero} ({role})", className="text-muted"),
-                        ],
-                        className="d-flex justify-content-between align-items-center",
-                    )
-                )
+
+        map_name = game.get("Map", "Unknown Map")
+        gamemode = game.get("Gamemode", "")
+        map_image_url = get_map_image_url(map_name)
+        date_str = (
+            game["Datum"].strftime("%d.%m.%Y")
+            if pd.notna(game.get("Datum"))
+            else "Invalid Date"
+        )
         result_color, result_text = (
             ("success", "VICTORY")
             if game.get("Win Lose") == "Win"
             else ("danger", "DEFEAT")
         )
-        date_str = ""
-        if pd.notna(game.get("Datum")):
-            try:
-                date_str = game["Datum"].strftime("%d.%m.%Y")
-            except AttributeError:
-                date_str = "Invalid Date"
-        map_name, gamemode = game.get("Map", "Unknown Map"), game.get("Gamemode", "")
+
+        # --- REVISED PLAYER LIST SECTION ---
+        player_list_items = []
+        for p in constants.players:
+            hero = game.get(f"{p} Hero")
+            if pd.notna(hero) and hero != "nicht dabei":
+                role = game.get(f"{p} Rolle", "N/A")
+                hero_image_url = get_hero_image_url(hero)  # Get the portrait URL
+
+                player_list_items.append(
+                    dbc.ListGroupItem(
+                        # Use flexbox to align the avatar and the text content
+                        html.Div(
+                            [
+                                # 1. The Hero Portrait (Avatar)
+                                html.Img(
+                                    src=hero_image_url,
+                                    style={
+                                        "width": "40px",
+                                        "height": "40px",
+                                        "borderRadius": "50%",  # Makes the image circular
+                                        "objectFit": "cover",
+                                        "marginRight": "15px",
+                                    },
+                                ),
+                                # 2. A div to hold the player info and hero name
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            [
+                                                html.Span(p, className="fw-bold"),
+                                                html.Span(
+                                                    f" ({role})",
+                                                    className="text-muted",
+                                                    style={"fontSize": "0.9em"},
+                                                ),
+                                            ]
+                                        ),
+                                        html.Div(hero),
+                                    ],
+                                    # This inner flexbox pushes the player name and hero name apart
+                                    className="d-flex justify-content-between align-items-center w-100",
+                                ),
+                            ],
+                            # This outer flexbox aligns the image with the text block
+                            className="d-flex align-items-center",
+                        )
+                    )
+                )
+
         card = dbc.Card(
-            [
-                dbc.CardHeader(
-                    html.Div(
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.Img(
+                            src=map_image_url,
+                            className="img-fluid rounded-start h-100",
+                            style={"objectFit": "cover"},
+                        ),
+                        md=3,
+                    ),
+                    dbc.Col(
                         [
-                            html.Div(
-                                [
-                                    html.H5(
-                                        f"{map_name} — {gamemode}", className="mb-0"
-                                    ),
-                                    html.Small(date_str, className="text-muted"),
-                                ]
+                            dbc.CardHeader(
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            [
+                                                html.H5(
+                                                    f"{map_name}", className="mb-0"
+                                                ),
+                                                html.Small(
+                                                    f"{gamemode} • {date_str}",
+                                                    className="text-muted",
+                                                ),
+                                            ]
+                                        ),
+                                        dbc.Badge(
+                                            result_text,
+                                            color=result_color,
+                                            className="ms-auto",
+                                            style={"height": "fit-content"},
+                                        ),
+                                    ],
+                                    className="d-flex justify-content-between align-items-center",
+                                )
                             ),
-                            dbc.Badge(
-                                result_text, color=result_color, className="ms-auto"
+                            dbc.CardBody(
+                                dbc.ListGroup(player_list_items, flush=True),
+                                className="p-0",
                             ),
                         ],
-                        className="d-flex justify-content-between align-items-center",
-                    )
-                ),
-                dbc.CardBody(dbc.ListGroup(player_list_items, flush=True)),
-            ],
+                        md=9,
+                    ),
+                ],
+                className="g-0",
+            ),
             className="mb-3",
         )
         history_items.append(card)
+
     return history_items
 
 
@@ -665,47 +845,129 @@ def update_all_graphs(
     title_suffix = f"({player}{' vs ' + ', '.join(active_compare_players) if active_compare_players else ''})"
     empty_fig = go.Figure(layout={"title": "Keine Daten für die Auswahl verfügbar"})
     stats_header = f"Gesamtstatistiken ({player})"
+
+    stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
     if not main_df.empty:
         total, wins = len(main_df), len(main_df[main_df["Win Lose"] == "Win"])
         losses, winrate = total - wins, wins / total if total > 0 else 0
-        stats_container = dbc.Row(
+
+        # --- REVISED: Primary Stats Row with subtle colors ---
+        primary_stats_row = dbc.Row(
             [
                 dbc.Col(
                     dbc.Card(
-                        [dbc.CardHeader("Gesamtspiele"), dbc.CardBody(f"{total}")],
-                        className="text-center",
-                    ),
-                    width=3,
+                        [
+                            dbc.CardHeader("Gesamtspiele"),
+                            dbc.CardBody(html.H4(f"{total}")),
+                        ],
+                        className="text-center h-100",
+                    )
                 ),
                 dbc.Col(
                     dbc.Card(
-                        [dbc.CardHeader("Gewonnen"), dbc.CardBody(f"{wins}")],
-                        className="text-center bg-success text-white",
-                    ),
-                    width=3,
+                        [
+                            dbc.CardHeader("Gewonnen"),
+                            dbc.CardBody(html.H4(f"{wins}", className="text-success")),
+                        ],
+                        className="text-center h-100",
+                    )
                 ),
                 dbc.Col(
                     dbc.Card(
-                        [dbc.CardHeader("Verloren"), dbc.CardBody(f"{losses}")],
-                        className="text-center bg-danger text-white",
-                    ),
-                    width=3,
+                        [
+                            dbc.CardHeader("Verloren"),
+                            dbc.CardBody(html.H4(f"{losses}", className="text-danger")),
+                        ],
+                        className="text-center h-100",
+                    )
                 ),
                 dbc.Col(
                     dbc.Card(
-                        [dbc.CardHeader("Winrate"), dbc.CardBody(f"{winrate:.0%}")],
-                        className="text-center bg-warning",
-                    ),
-                    width=3,
+                        [
+                            dbc.CardHeader("Winrate"),
+                            dbc.CardBody(
+                                html.H4(f"{winrate:.0%}", className="text-primary")
+                            ),
+                        ],
+                        className="text-center h-100",
+                    )
                 ),
-            ]
+            ],
+            className="mb-4",  # Add margin to separate the rows
         )
-    else:
-        stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
 
+        # --- Row 2: "Best Of" Stats (no changes here) ---
+        secondary_stat_cards = []
+        try:
+            most_played_hero = main_df["Hero"].mode()[0]
+            hero_plays = main_df["Hero"].value_counts()[most_played_hero]
+            card = create_stat_card(
+                "Meistgespielter Held",
+                get_hero_image_url(most_played_hero),
+                most_played_hero,
+                f"{hero_plays} Spiele",
+            )
+        except (KeyError, IndexError):
+            card = create_stat_card(
+                "Meistgespielter Held", get_hero_image_url(None), "N/A", "Keine Daten"
+            )
+        secondary_stat_cards.append(card)
+        try:
+            hero_wr = calculate_winrate(main_df, "Hero")
+            hero_wr_filtered = hero_wr[hero_wr["Spiele"] >= min_games]
+            best_hero = hero_wr_filtered.loc[hero_wr_filtered["Winrate"].idxmax()]
+            card = create_stat_card(
+                "Beste Winrate (Held)",
+                get_hero_image_url(best_hero["Hero"]),
+                best_hero["Hero"],
+                f"{best_hero['Winrate']:.0%} ({best_hero['Spiele']} Spiele)",
+            )
+        except (KeyError, IndexError, ValueError):
+            card = create_stat_card(
+                "Beste Winrate (Held)",
+                get_hero_image_url(None),
+                "N/A",
+                f"Min. {min_games} Spiele",
+            )
+        secondary_stat_cards.append(card)
+        try:
+            most_played_map = main_df["Map"].mode()[0]
+            map_plays = main_df["Map"].value_counts()[most_played_map]
+            card = create_stat_card(
+                "Meistgespielte Map",
+                get_map_image_url(most_played_map),
+                most_played_map,
+                f"{map_plays} Spiele",
+            )
+        except (KeyError, IndexError):
+            card = create_stat_card(
+                "Meistgespielte Map", get_map_image_url(None), "N/A", "Keine Daten"
+            )
+        secondary_stat_cards.append(card)
+        try:
+            map_wr = calculate_winrate(main_df, "Map")
+            map_wr_filtered = map_wr[map_wr["Spiele"] >= min_games]
+            best_map = map_wr_filtered.loc[map_wr_filtered["Winrate"].idxmax()]
+            card = create_stat_card(
+                "Beste Winrate (Map)",
+                get_map_image_url(best_map["Map"]),
+                best_map["Map"],
+                f"{best_map['Winrate']:.0%} ({best_map['Spiele']} Spiele)",
+            )
+        except (KeyError, IndexError, ValueError):
+            card = create_stat_card(
+                "Beste Winrate (Map)",
+                get_map_image_url(None),
+                "N/A",
+                f"Min. {min_games} Spiele",
+            )
+        secondary_stat_cards.append(card)
+
+        stats_container = html.Div([primary_stats_row, dbc.Row(secondary_stat_cards)])
+
+    # (The rest of the function remains completely unchanged)
     map_stat_output = None
     attack_def_modes = ["Attack", "Defense", "Attack Attack"]
-
     bar_fig = go.Figure()
     if (
         map_view_type
@@ -713,7 +975,6 @@ def update_all_graphs(
         and map_stat_type in ["winrate", "plays"]
     ):
         if map_stat_type == "winrate":
-            # winrate logic
             map_data = calculate_winrate(main_df, "Map")
             map_data = map_data[map_data["Spiele"] >= min_games]
             if not map_data.empty:
@@ -721,7 +982,6 @@ def update_all_graphs(
                 plot_df["Mode"] = plot_df["Attack Def"].replace(
                     {"Attack Attack": "Gesamt"}
                 )
-
                 grouped = (
                     plot_df.groupby(["Map", "Mode", "Win Lose"])
                     .size()
@@ -734,9 +994,7 @@ def update_all_graphs(
                 grouped["Spiele"] = grouped["Win"] + grouped["Lose"]
                 grouped["Winrate"] = grouped["Win"] / grouped["Spiele"]
                 plot_data = grouped.reset_index()
-
                 plot_data = plot_data[plot_data["Map"].isin(map_data["Map"])]
-
                 if not plot_data.empty:
                     bar_fig = px.bar(
                         plot_data,
@@ -764,7 +1022,6 @@ def update_all_graphs(
                     bar_fig = empty_fig
             else:
                 bar_fig = empty_fig
-
         elif map_stat_type == "plays":
             if not main_df.empty:
                 plot_df = main_df.copy()
@@ -800,7 +1057,7 @@ def update_all_graphs(
                 )
             else:
                 bar_fig = empty_fig
-    else:  # Standard, non-detailed view
+    else:
         group_col = {
             "winrate": "Map",
             "plays": "Map",
@@ -853,24 +1110,19 @@ def update_all_graphs(
             bar_fig.update_layout(yaxis_tickformat=".0%")
         if not bar_fig.data:
             bar_fig = empty_fig
-
-    # --- Assemble final layout for the map tab ---
     if map_stat_type == "winrate":
         map_stat_output = dbc.Row(dbc.Col(dcc.Graph(figure=bar_fig), width=12))
     else:
         pie_fig = go.Figure()
         pie_data_col = None
-
         if map_stat_type == "gamemode":
             pie_data_col = "Gamemode"
         elif map_stat_type == "attackdef":
             pie_data_col = "Attack Def"
-
         if pie_data_col:
             pie_data = main_df.copy()
             if pie_data_col == "Attack Def":
                 pie_data = pie_data[pie_data["Attack Def"].isin(attack_def_modes)]
-
             pie_data = pie_data.groupby(pie_data_col).size().reset_index(name="Spiele")
             if not pie_data.empty:
                 pie_fig = px.pie(
@@ -884,13 +1136,8 @@ def update_all_graphs(
                 )
             else:
                 pie_fig = empty_fig
-
         if map_stat_type == "plays":
-            map_stat_output = dbc.Row(
-                [
-                    dbc.Col(dcc.Graph(figure=bar_fig), width=12),
-                ]
-            )
+            map_stat_output = dbc.Row([dbc.Col(dcc.Graph(figure=bar_fig), width=12)])
         else:
             map_stat_output = dbc.Row(
                 [
@@ -1002,11 +1249,30 @@ def update_all_graphs(
     )
     if not winrate_fig.data:
         winrate_fig = empty_fig
-    hero_options = (
-        [{"label": h, "value": h} for h in sorted(main_df["Hero"].dropna().unique())]
-        if not main_df.empty
-        else []
-    )
+
+    hero_options = []
+    if not main_df.empty:
+        heroes = sorted(main_df["Hero"].dropna().unique())
+        for hero in heroes:
+            hero_options.append(
+                {
+                    "label": html.Div(
+                        [
+                            html.Img(
+                                src=get_hero_image_url(hero),
+                                style={
+                                    "height": "25px",
+                                    "marginRight": "10px",
+                                    "borderRadius": "50%",
+                                },
+                            ),
+                            html.Span(hero),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
+                    ),
+                    "value": hero,
+                }
+            )
 
     return (
         map_stat_output,
