@@ -309,30 +309,57 @@ app.layout = dbc.Container(
                                     label="Match Verlauf",
                                     tab_id="tab-history",
                                     children=[
+                                        dbc.Card(
+                                            dbc.CardBody([
+                                                dbc.Row([
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Spieler filtern:"),
+                                                            dcc.Dropdown(
+                                                                id='player-dropdown-match-verlauf',
+                                                                options=[{'label': 'Alle Spieler', 'value': 'ALL'}] + [{'label': player, 'value': player} for player in constants.players],
+                                                                value='ALL',
+                                                                clearable=False,
+                                                            ),
+                                                        ],
+                                                        width=6
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Held filtern:"),
+                                                            dcc.Dropdown(
+                                                                id='hero-filter-dropdown-match',
+                                                                placeholder="Alle Helden",
+                                                                clearable=True,
+                                                            ),
+                                                        ],
+                                                        width=6
+                                                    )
+                                                ])
+                                            ]),
+                                            className="mb-3"
+                                        ),
+                                        html.Div(
+                                            id="history-list-container",
+                                            style={
+                                                "maxHeight": "1000px",
+                                                "overflowY": "auto",
+                                            },
+                                        ),
                                         dbc.Row(
                                             [
-                                                dbc.Col(width=6),
                                                 dbc.Col(
                                                     dcc.Dropdown(
                                                         id="history-load-amount-dropdown",
                                                         options=[
-                                                            {
-                                                                "label": "10 weitere laden",
-                                                                "value": 10,
-                                                            },
-                                                            {
-                                                                "label": "25 weitere laden",
-                                                                "value": 25,
-                                                            },
-                                                            {
-                                                                "label": "50 weitere laden",
-                                                                "value": 50,
-                                                            },
+                                                            {"label": "10 weitere laden", "value": 10},
+                                                            {"label": "25 weitere laden", "value": 25},
+                                                            {"label": "50 weitere laden", "value": 50},
                                                         ],
                                                         value=10,
                                                         clearable=False,
                                                     ),
-                                                    width=3,
+                                                    width={"size": 3, "offset": 3},
                                                 ),
                                                 dbc.Col(
                                                     dbc.Button(
@@ -344,14 +371,8 @@ app.layout = dbc.Container(
                                                     width=3,
                                                 ),
                                             ],
-                                            className="my-3",
-                                        ),
-                                        html.Div(
-                                            id="history-list-container",
-                                            style={
-                                                "maxHeight": "1000px",
-                                                "overflowY": "auto",
-                                            },
+                                            className="my-3 align-items-center",
+                                            justify="center"
                                         ),
                                     ],
                                 ),
@@ -779,25 +800,109 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
     Output("history-list-container", "children"),
     Output("history-display-count-store", "data"),
     Input("load-more-history-button", "n_clicks"),
+    Input("player-dropdown-match-verlauf", "value"),
+    Input("hero-filter-dropdown-match", "value"),
     Input("dummy-output", "children"),
     State("history-display-count-store", "data"),
     State("history-load-amount-dropdown", "value"),
 )
-def update_history_display(n_clicks, _, current_store, load_amount):
+def update_history_display(n_clicks, player_name, hero_name, _, current_store, load_amount):
     global df
     if df.empty:
-        return [dbc.Alert("Keine Match History verfügbar.", color="danger")], {
-            "count": 10
-        }
+        return [dbc.Alert("Keine Match History verfügbar.", color="danger")], {"count": 10}
+
     triggered_id = ctx.triggered_id if ctx.triggered_id else "dummy-output"
-    current_count = current_store.get("count", 10)
-    if triggered_id == "load-more-history-button":
-        new_count = current_count + load_amount
-    else:
+    
+    # Reset count if filters change, otherwise increment
+    if triggered_id in ["player-dropdown-match-verlauf", "hero-filter-dropdown-match", "dummy-output"]:
         new_count = 10
-    games_to_show = df.head(new_count)
+    else: # triggered by "load-more-history-button"
+        new_count = current_store.get("count", 10) + load_amount
+
+    filtered_df = df.copy()
+    
+    # Filter by player
+    if player_name and player_name != 'ALL':
+        player_hero_col = f'{player_name} Hero'
+        if player_hero_col in filtered_df.columns:
+            # Filter for games the player participated in
+            filtered_df = filtered_df[filtered_df[player_hero_col].notna() & (filtered_df[player_hero_col] != "nicht dabei")]
+            
+            # Filter by hero for that specific player
+            if hero_name:
+                filtered_df = filtered_df[filtered_df[player_hero_col] == hero_name]
+    
+    # If a hero is selected but no specific player, filter for any player playing that hero
+    elif hero_name and (not player_name or player_name == 'ALL'):
+        # Check all player hero columns
+        hero_cols = [f'{p} Hero' for p in constants.players if f'{p} Hero' in filtered_df.columns]
+        # Create a boolean mask. True if any of the hero columns for a row equals the hero_name
+        mask = filtered_df[hero_cols].eq(hero_name).any(axis=1)
+        filtered_df = filtered_df[mask]
+
+    games_to_show = filtered_df.head(new_count)
     history_layout = generate_history_layout_simple(games_to_show)
+    
+    if games_to_show.empty:
+        history_layout = [dbc.Alert("Für diese Filterkombination wurden keine Spiele gefunden.", color="info")]
+
     return history_layout, {"count": new_count}
+
+
+@app.callback(
+    Output("hero-filter-dropdown-match", "options"),
+    Output("hero-filter-dropdown-match", "value"),
+    Input("player-dropdown-match-verlauf", "value"),
+    Input("dummy-output", "children"),
+    State("hero-filter-dropdown-match", "value"),
+)
+def update_match_history_hero_options(selected_player, _, current_hero):
+    if df.empty:
+        return [], None
+
+    if not selected_player or selected_player == 'ALL':
+        # Show all heroes from all players if no player is selected
+        all_heroes = set()
+        for p in constants.players:
+            hero_col = f'{p} Hero'
+            if hero_col in df.columns:
+                all_heroes.update(df[df[hero_col].notna() & (df[hero_col] != "nicht dabei")][hero_col].unique())
+        heroes = sorted(list(all_heroes))
+    else:
+        # Show heroes for the selected player
+        player_hero_col = f'{selected_player} Hero'
+        if player_hero_col in df.columns:
+            heroes = sorted(df[df[player_hero_col].notna() & (df[player_hero_col] != "nicht dabei")][player_hero_col].unique())
+        else:
+            heroes = []
+
+    hero_options = []
+    for hero in heroes:
+        hero_options.append(
+            {
+                "label": html.Div(
+                    [
+                        html.Img(
+                            src=get_hero_image_url(hero),
+                            style={
+                                "height": "25px",
+                                "marginRight": "10px",
+                                "borderRadius": "50%",
+                            },
+                        ),
+                        html.Span(hero),
+                    ],
+                    style={"display": "flex", "alignItems": "center"},
+                ),
+                "value": hero,
+            }
+        )
+    
+    # Check if the current hero is still valid
+    if current_hero and current_hero in heroes:
+        return hero_options, current_hero
+    
+    return hero_options, None
 
 
 @app.callback(
