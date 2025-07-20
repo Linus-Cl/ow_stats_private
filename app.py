@@ -563,6 +563,7 @@ def generate_history_layout_simple(games_df):
 
         map_name = game.get("Map", "Unknown Map")
         gamemode = game.get("Gamemode", "")
+        att_def = game.get("Attack Def")
         map_image_url = get_map_image_url(map_name)
         date_str = (
             game["Datum"].strftime("%d.%m.%Y")
@@ -574,7 +575,11 @@ def generate_history_layout_simple(games_df):
             if game.get("Win Lose") == "Win"
             else ("danger", "DEFEAT")
         )
-
+        if att_def == "Attack Attack":
+            att_def_string =  f"{gamemode} • {date_str}"
+        else:
+            att_def_string =  f"{gamemode} • {date_str} • {att_def}"
+       
         # --- REVISED PLAYER LIST SECTION ---
         player_list_items = []
         for p in constants.players:
@@ -646,7 +651,7 @@ def generate_history_layout_simple(games_df):
                                                     f"{map_name}", className="mb-0"
                                                 ),
                                                 html.Small(
-                                                    f"{gamemode} • {date_str}",
+                                                    att_def_string,
                                                     className="text-muted",
                                                 ),
                                             ]
