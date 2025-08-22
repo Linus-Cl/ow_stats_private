@@ -2,3 +2,7 @@ dash
 pandas
 plotly
 gunicorn
+pyyaml
+dash-bootstrap-components
+requests
+openpyxl

@@ -11,7 +11,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import dash_bootstrap_components as dbc
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
 
 # --- Local Imports ---
 import constants
@@ -54,12 +54,6 @@ def load_data(use_local=True):
                 df = pd.DataFrame()
 
     if not df.empty:
-        # VALIDATE REQUIRED COLUMNS
-        required = ["Win Lose", "Map", "Match ID"]
-        missing = [c for c in required if c not in df.columns]
-        if missing:
-            print(f"Warnung: Fehlende Pflichtspalten: {missing}")
-
         df.columns = df.columns.str.strip()
         if "Attack Def" in df.columns:
             df["Attack Def"] = df["Attack Def"].str.strip()
@@ -74,18 +68,6 @@ def load_data(use_local=True):
         else:
             print("Warning: 'Match ID' column not found. History may not be in order.")
 
-        # Normalize role labels across all per-player role columns
-        role_map = {
-            "DPS": "Damage",
-            "Damage": "Damage",
-            "Tank": "Tank",
-            "Support": "Support",
-        }
-        for col in df.columns:
-            if col.endswith(" Rolle"):
-                df[col] = df[col].astype(str).str.strip()
-                df[col] = df[col].replace(role_map)
-
 
 load_data(use_local=True)
 
@@ -93,9 +75,7 @@ load_data(use_local=True)
 # --- Layout ---
 app.layout = dbc.Container(
     [
-        # Store removed (no longer needed for dropdown-based assignment)
         dcc.Store(id="history-display-count-store", data={"count": 10}),
-        dcc.Store(id="role-history-count-store", data={"count": 10}),
         dbc.Row(
             [
                 dbc.Col(
@@ -258,146 +238,6 @@ app.layout = dbc.Container(
                                             ]
                                         ),
                                         html.Div(id="map-stat-container"),
-                                    ],
-                                ),
-                                dbc.Tab(
-                                    label="Rollen-Zuordnung",
-                                    tab_id="tab-role-assign",
-                                    children=[
-                                        html.P(
-                                            "Weise drei Spieler den Rollen zu. Jeder Spieler darf nur einmal vorkommen."
-                                        ),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Tank (max. 1 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-tank",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Damage (max. 2 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-damage",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Support (max. 2 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-support",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        # Detaillierter Modus: Heldenauswahl je Spieler
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dbc.Label(
-                                                        "Detaillierter Modus (Helden wählen)"
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Switch(
-                                                        id="role-detailed-toggle",
-                                                        value=False,
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                            ],
-                                            className="align-items-center mb-2",
-                                        ),
-                                        html.Div(
-                                            id="role-detailed-hero-selectors",
-                                            className="mb-3",
-                                        ),
-                                        html.Div(id="role-assign-result"),
-                                        html.Hr(),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dbc.Label(
-                                                        "Passende Matches anzeigen"
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Switch(
-                                                        id="role-history-toggle",
-                                                        value=False,
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                            ],
-                                            className="align-items-center mb-2",
-                                        ),
-                                        html.Div(id="role-assign-history"),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dcc.Dropdown(
-                                                        id="role-history-load-amount-dropdown",
-                                                        options=[
-                                                            {
-                                                                "label": "10 weitere laden",
-                                                                "value": 10,
-                                                            },
-                                                            {
-                                                                "label": "25 weitere laden",
-                                                                "value": 25,
-                                                            },
-                                                            {
-                                                                "label": "50 weitere laden",
-                                                                "value": 50,
-                                                            },
-                                                        ],
-                                                        value=10,
-                                                        clearable=False,
-                                                    ),
-                                                    width={"size": 3, "offset": 3},
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Button(
-                                                        "Mehr anzeigen",
-                                                        id="role-history-load-more",
-                                                        color="secondary",
-                                                        className="w-100",
-                                                    ),
-                                                    width=3,
-                                                ),
-                                            ],
-                                            className="my-3 align-items-center",
-                                            justify="center",
-                                        ),
                                     ],
                                 ),
                                 dbc.Tab(
@@ -900,104 +740,6 @@ def generate_history_layout_simple(games_df):
 
 # --- Callbacks ---
 @app.callback(
-    Output("role-detailed-hero-selectors", "children"),
-    Input("role-detailed-toggle", "value"),
-    Input("assign-tank", "value"),
-    Input("assign-damage", "value"),
-    Input("assign-support", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
-)
-def build_detailed_hero_selectors(
-    detail_on, tank_vals, dmg_vals, sup_vals, season, month, year
-):
-    if not detail_on:
-        return None
-
-    tank = tank_vals or []
-    dmg = dmg_vals or []
-    sup = sup_vals or []
-    selected_players = []
-    role_by_player = {}
-    if len(tank) == 1:
-        selected_players.append(tank[0])
-        role_by_player[tank[0]] = "Tank"
-    for p in dmg:
-        selected_players.append(p)
-        role_by_player[p] = "Damage"
-    for p in sup:
-        selected_players.append(p)
-        role_by_player[p] = "Support"
-
-    if not selected_players:
-        return dbc.Alert("Bitte zuerst Spieler in Rollen auswählen.", color="info")
-
-    global df
-    if df.empty:
-        return dbc.Alert("Keine Daten geladen.", color="danger")
-
-    # Zeitrahmen filtern
-    temp = df.copy()
-    if season and "Season" in temp.columns:
-        temp = temp[temp["Season"] == season]
-    else:
-        if year is not None and "Jahr" in temp.columns:
-            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None and "Monat" in temp.columns:
-            temp = temp[temp["Monat"] == month]
-
-    cols = []
-    for p in selected_players:
-        role = role_by_player.get(p)
-        hero_col = f"{p} Hero"
-        role_col = f"{p} Rolle"
-        options = []
-        if hero_col in temp.columns and role_col in temp.columns:
-            subset = temp[(temp[hero_col].notna()) & (temp[hero_col] != "nicht dabei")]
-            if role:
-                subset = subset[subset[role_col] == role]
-            heroes = sorted(subset[hero_col].dropna().unique())
-            options = [
-                {
-                    "label": html.Div(
-                        [
-                            html.Img(
-                                src=get_hero_image_url(h),
-                                style={
-                                    "height": "22px",
-                                    "marginRight": "8px",
-                                    "borderRadius": "50%",
-                                },
-                            ),
-                            html.Span(h),
-                        ],
-                        style={"display": "flex", "alignItems": "center"},
-                    ),
-                    "value": h,
-                }
-                for h in heroes
-            ]
-        cols.append(
-            dbc.Col(
-                [
-                    dbc.Label(f"{p} – {role}" if role else p),
-                    dcc.Dropdown(
-                        id={"type": "detailed-hero", "player": p},
-                        options=options,
-                        placeholder="Helden wählen (optional)",
-                        multi=True,
-                        clearable=True,
-                    ),
-                ],
-                md=4,
-            )
-        )
-
-    return dbc.Row(cols, className="g-3")
-
-
-@app.callback(
     Output("dummy-output", "children"),
     Input("update-data-button", "n_clicks"),
     prevent_initial_call=True,
@@ -1029,26 +771,6 @@ def update_filter_options(_):
         for y in sorted(df["Jahr"].dropna().unique())
     ]
     return season_options, month_options, year_options
-
-
-@app.callback(
-    Output("assign-tank", "options"),
-    Output("assign-damage", "options"),
-    Output("assign-support", "options"),
-    Input("dummy-output", "children"),
-)
-def populate_role_assignment_options(_):
-    if df.empty:
-        opts = [{"label": p, "value": p} for p in constants.players]
-        return opts, opts, opts
-    # Derive players from columns ending with ' Rolle'
-    players = []
-    for col in df.columns:
-        if col.endswith(" Rolle"):
-            players.append(col.replace(" Rolle", ""))
-    players = players or constants.players
-    opts = [{"label": p, "value": p} for p in players]
-    return opts, opts, opts
 
 
 @app.callback(
@@ -1241,581 +963,6 @@ def update_match_history_hero_options(selected_player, _, current_hero):
         return hero_options, current_hero
 
     return hero_options, None
-
-
-@app.callback(
-    Output("role-assign-result", "children"),
-    Input("assign-tank", "value"),
-    Input("assign-damage", "value"),
-    Input("assign-support", "value"),
-    Input("role-detailed-toggle", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
-    Input({"type": "detailed-hero", "player": ALL}, "value"),
-    State({"type": "detailed-hero", "player": ALL}, "id"),
-)
-def compute_role_stats(
-    tank_vals, dmg_vals, sup_vals, detail_on, season, month, year, hero_values, hero_ids
-):
-    # Normalize inputs to lists
-    tank = tank_vals or []
-    dmg = dmg_vals or []
-    sup = sup_vals or []
-
-    # Limits: allow partial selections
-    if len(tank) > 1 or len(dmg) > 2 or len(sup) > 2:
-        return dbc.Alert(
-            "Zu viele Spieler gewählt: max 1 Tank, max 2 Damage, max 2 Support.",
-            color="warning",
-        )
-    if len(tank) + len(dmg) + len(sup) == 0:
-        return dbc.Alert(
-            "Bitte mindestens einen Spieler in einer Rolle auswählen.", color="info"
-        )
-
-    # Uniqueness
-    all_players = tank + dmg + sup
-    if len(set(all_players)) != len(all_players):
-        return dbc.Alert(
-            "Jeder Spieler darf nur einmal vorkommen (über alle Rollen).",
-            color="warning",
-        )
-
-    global df
-    if df.empty:
-        return dbc.Alert("Keine Daten geladen.", color="danger")
-
-    # Apply timeframe filters
-    temp = df.copy()
-    if season and "Season" in temp.columns:
-        temp = temp[temp["Season"] == season]
-    else:
-        if year is not None and "Jahr" in temp.columns:
-            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None and "Monat" in temp.columns:
-            temp = temp[temp["Monat"] == month]
-    if temp.empty:
-        return dbc.Alert("Keine Daten für den gewählten Zeitraum.", color="info")
-
-    # Verify required columns
-    required_cols = ["Win Lose"]
-    for p in all_players:
-        required_cols += [f"{p} Rolle", f"{p} Hero"]
-    missing = [c for c in required_cols if c not in temp.columns]
-    if missing:
-        return dbc.Alert(f"Erforderliche Spalten fehlen: {missing}", color="danger")
-
-    # Build mask for chosen players only
-    mask = pd.Series(True, index=temp.index)
-    # Optional: aus Detailmodus gewählte Helden je Spieler
-    selected_heroes = {}
-    if detail_on:
-        try:
-            if hero_values is not None and hero_ids is not None:
-                for vals, _id in zip(hero_values, hero_ids):
-                    p = _id.get("player") if isinstance(_id, dict) else None
-                    if p and vals:
-                        selected_heroes[p] = set(vals)
-        except Exception:
-            selected_heroes = {}
-    if len(tank) == 1:
-        p = tank[0]
-        mask = mask & temp[f"{p} Rolle"].eq("Tank")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in dmg:
-        mask = mask & temp[f"{p} Rolle"].eq("Damage")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in sup:
-        mask = mask & temp[f"{p} Rolle"].eq("Support")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-
-    filtered = temp[mask]
-    if filtered.empty:
-        return dbc.Alert("Keine Spiele für diese Konstellation gefunden.", color="info")
-
-    counts = filtered["Win Lose"].value_counts()
-    wins, losses = counts.get("Win", 0), counts.get("Lose", 0)
-    total = wins + losses
-    wr = wins / total if total else 0
-
-    header_badge = dbc.Badge(
-        f"{wr:.0%}",
-        color=("success" if wr >= 0.5 else "danger" if total else "secondary"),
-        className="ms-auto",
-        pill=True,
-    )
-
-    role_pills = []
-    if tank:
-        role_pills.append(
-            dbc.Badge(f"Tank: {', '.join(tank)}", color="primary", className="me-2")
-        )
-    if dmg:
-        role_pills.append(
-            dbc.Badge(f"Damage: {', '.join(dmg)}", color="info", className="me-2")
-        )
-    if sup:
-        role_pills.append(dbc.Badge(f"Support: {', '.join(sup)}", color="success"))
-
-    # Optional: aktive Helden-Filter anzeigen
-    hero_filters_block = None
-    if selected_heroes:
-        hero_lines = [
-            html.Div(f"{p}: {', '.join(sorted(list(heroes)))}", className="small")
-            for p, heroes in selected_heroes.items()
-        ]
-        hero_filters_block = html.Div(
-            [html.Small("Helden-Filter:", className="text-muted d-block"), *hero_lines],
-            className="mb-2",
-        )
-
-    return dbc.Card(
-        [
-            dbc.CardHeader(
-                html.Div(
-                    [html.Strong("Statistik zur Rollen-Konstellation"), header_badge],
-                    className="d-flex align-items-center",
-                )
-            ),
-            dbc.CardBody(
-                [
-                    html.Div(role_pills, className="mb-2"),
-                    hero_filters_block,
-                    dbc.Row(
-                        [
-                            dbc.Col(
-                                dbc.Card(
-                                    [
-                                        dbc.CardHeader("Spiele"),
-                                        dbc.CardBody(html.H4(f"{total}")),
-                                    ],
-                                    className="text-center h-100",
-                                )
-                            ),
-                            dbc.Col(
-                                dbc.Card(
-                                    [
-                                        dbc.CardHeader("Gewonnen"),
-                                        dbc.CardBody(
-                                            html.H4(f"{wins}", className="text-success")
-                                        ),
-                                    ],
-                                    className="text-center h-100",
-                                )
-                            ),
-                            dbc.Col(
-                                dbc.Card(
-                                    [
-                                        dbc.CardHeader("Verloren"),
-                                        dbc.CardBody(
-                                            html.H4(
-                                                f"{losses}", className="text-danger"
-                                            )
-                                        ),
-                                    ],
-                                    className="text-center h-100",
-                                )
-                            ),
-                            dbc.Col(
-                                dbc.Card(
-                                    [
-                                        dbc.CardHeader("Winrate"),
-                                        dbc.CardBody(
-                                            html.H4(
-                                                f"{wr:.0%}", className="text-primary"
-                                            )
-                                        ),
-                                    ],
-                                    className="text-center h-100",
-                                )
-                            ),
-                        ],
-                        className="g-3",
-                    ),
-                ]
-            ),
-        ],
-        className="mb-2",
-    )
-
-
-@app.callback(
-    Output("role-assign-history", "children"),
-    Input("role-history-count-store", "data"),
-    Input("role-history-toggle", "value"),
-    Input("role-detailed-toggle", "value"),
-    Input("assign-tank", "value"),
-    Input("assign-damage", "value"),
-    Input("assign-support", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
-    State({"type": "detailed-hero", "player": ALL}, "value"),
-    State({"type": "detailed-hero", "player": ALL}, "id"),
-)
-def show_role_assignment_history(
-    count_store,
-    show,
-    detail_on,
-    tank_vals,
-    dmg_vals,
-    sup_vals,
-    season,
-    month,
-    year,
-    hero_values,
-    hero_ids,
-):
-    if not show:
-        return None
-    # wie viele Einträge anzeigen
-    display_count = 10
-    try:
-        if isinstance(count_store, dict):
-            display_count = int(count_store.get("count", 10))
-        elif isinstance(count_store, (int, float)):
-            display_count = int(count_store)
-    except Exception:
-        display_count = 10
-    tank = tank_vals or []
-    dmg = dmg_vals or []
-    sup = sup_vals or []
-
-    if len(tank) > 1 or len(dmg) > 2 or len(sup) > 2:
-        return dbc.Alert("Zu viele Spieler gewählt für die Historie.", color="warning")
-
-    all_players = tank + dmg + sup
-    if len(all_players) == 0:
-        return dbc.Alert("Bitte mindestens einen Spieler auswählen.", color="info")
-    if len(set(all_players)) != len(all_players):
-        return dbc.Alert("Doppelte Spieler in Rollen-Auswahl.", color="warning")
-
-    global df
-    if df.empty:
-        return dbc.Alert("Keine Daten geladen.", color="danger")
-
-    temp = df.copy()
-    if season and "Season" in temp.columns:
-        temp = temp[temp["Season"] == season]
-    else:
-        if year is not None and "Jahr" in temp.columns:
-            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None and "Monat" in temp.columns:
-            temp = temp[temp["Monat"] == month]
-    if temp.empty:
-        return dbc.Alert("Keine Daten für den Zeitraum.", color="info")
-
-    # Required columns
-    for p in all_players:
-        for c in [f"{p} Rolle", f"{p} Hero"]:
-            if c not in temp.columns:
-                return dbc.Alert(
-                    "Erforderliche Spalten fehlen in den Daten.", color="danger"
-                )
-
-    mask = pd.Series(True, index=temp.index)
-    # Optional: aus Detailmodus gewählte Helden je Spieler
-    selected_heroes = {}
-    if detail_on:
-        try:
-            if hero_values is not None and hero_ids is not None:
-                for vals, _id in zip(hero_values, hero_ids):
-                    p = _id.get("player") if isinstance(_id, dict) else None
-                    if p and vals:
-                        selected_heroes[p] = set(vals)
-        except Exception:
-            selected_heroes = {}
-    if len(tank) == 1:
-        p = tank[0]
-        mask = mask & temp[f"{p} Rolle"].eq("Tank")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in dmg:
-        mask = mask & temp[f"{p} Rolle"].eq("Damage")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in sup:
-        mask = mask & temp[f"{p} Rolle"].eq("Support")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-
-    full_subset = temp[mask].copy()
-    total_full = len(full_subset)
-    # Sortiere nach Match ID absteigend, falls vorhanden, und slice nach display_count
-    if "Match ID" in full_subset.columns:
-        full_subset.sort_values("Match ID", ascending=False, inplace=True)
-    subset = full_subset.head(display_count)
-    if subset.empty:
-        return dbc.Alert("Keine passenden Matches gefunden.", color="info")
-
-    # Kompakte Liste mit Map-Thumbnail, Ergebnis-Badge und Spielerlinien
-    items = []
-    for _, row in subset.iterrows():
-        map_name = row.get("Map", "—")
-        map_img = get_map_image_url(map_name)
-        date_str = (
-            row["Datum"].strftime("%d.%m.%Y")
-            if "Datum" in subset.columns and pd.notna(row.get("Datum"))
-            else "—"
-        )
-        result = row.get("Win Lose")
-        badge = dbc.Badge(
-            "VICTORY" if result == "Win" else "DEFEAT",
-            color=("success" if result == "Win" else "danger"),
-            className="ms-2",
-        )
-        role_lines = []
-        for p in tank:
-            role_lines.append(
-                html.Div(f"Tank: {p} • {row.get(f'{p} Hero', '—')}", className="small")
-            )
-        for p in dmg:
-            role_lines.append(
-                html.Div(
-                    f"Damage: {p} • {row.get(f'{p} Hero', '—')}", className="small"
-                )
-            )
-        for p in sup:
-            role_lines.append(
-                html.Div(
-                    f"Support: {p} • {row.get(f'{p} Hero', '—')}", className="small"
-                )
-            )
-
-        items.append(
-            dbc.ListGroupItem(
-                dbc.Row(
-                    [
-                        dbc.Col(
-                            html.Img(
-                                src=map_img,
-                                style={
-                                    "width": "80px",
-                                    "height": "60px",
-                                    "objectFit": "cover",
-                                    "borderRadius": "6px",
-                                },
-                            ),
-                            width=2,
-                        ),
-                        dbc.Col(
-                            [
-                                html.Div(
-                                    [
-                                        html.Strong(map_name),
-                                        html.Span(
-                                            f" • {date_str}",
-                                            className="text-muted",
-                                            style={"marginLeft": "6px"},
-                                        ),
-                                        badge,
-                                    ],
-                                    className="d-flex align-items-center",
-                                ),
-                                html.Div(role_lines),
-                            ]
-                        ),
-                    ],
-                    className="align-items-center",
-                )
-            )
-        )
-    components = [dbc.ListGroup(items, flush=True)]
-    # Hinweis wenn Ende erreicht
-    if display_count >= total_full:
-        components.append(
-            html.Div(
-                "Keine weiteren Einträge.",
-                className="text-muted small mt-2",
-            )
-        )
-
-    return html.Div(components)
-
-
-@app.callback(
-    Output("role-history-count-store", "data"),
-    Input("role-history-load-more", "n_clicks"),
-    Input("role-history-toggle", "value"),
-    Input("role-detailed-toggle", "value"),
-    Input("assign-tank", "value"),
-    Input("assign-damage", "value"),
-    Input("assign-support", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
-    Input({"type": "detailed-hero", "player": ALL}, "value"),
-    State("role-history-count-store", "data"),
-    State("role-history-load-amount-dropdown", "value"),
-)
-def update_role_history_count(
-    n_clicks,
-    toggle,
-    detail_on,
-    tank_vals,
-    dmg_vals,
-    sup_vals,
-    season,
-    month,
-    year,
-    detailed_hero_values,
-    current_store,
-    load_amount,
-):
-    # Basiswert
-    base = 10
-    if not isinstance(current_store, dict):
-        current_store = {"count": base}
-
-    triggered = ctx.triggered_id
-
-    # Reset bei Filter-/Toggle-Änderungen oder wenn Toggle aus ist
-    reset_triggers = {
-        "role-history-toggle",
-        "role-detailed-toggle",
-        "assign-tank",
-        "assign-damage",
-        "assign-support",
-        "season-dropdown",
-        "month-dropdown",
-        "year-dropdown",
-    }
-
-    if not toggle:
-        return {"count": base}
-
-    if isinstance(triggered, dict) or triggered in reset_triggers:
-        return {"count": base}
-
-    # Nur erhöhen, wenn Button geklickt wurde und Toggle an ist
-    if triggered == "role-history-load-more" and toggle:
-        step = load_amount or base
-        try:
-            step = int(step)
-        except Exception:
-            step = base
-        new_count = int(current_store.get("count", base)) + step
-        return {"count": new_count}
-
-    # Fallback: unverändert
-    return current_store
-
-
-@app.callback(
-    Output("role-history-load-more", "disabled"),
-    Output("role-history-load-amount-dropdown", "disabled"),
-    Input("role-history-toggle", "value"),
-    Input("role-history-count-store", "data"),
-    Input("role-detailed-toggle", "value"),
-    Input("assign-tank", "value"),
-    Input("assign-damage", "value"),
-    Input("assign-support", "value"),
-    Input("season-dropdown", "value"),
-    Input("month-dropdown", "value"),
-    Input("year-dropdown", "value"),
-    State({"type": "detailed-hero", "player": ALL}, "value"),
-    State({"type": "detailed-hero", "player": ALL}, "id"),
-)
-def toggle_role_history_controls(
-    show_history,
-    count_store,
-    detail_on,
-    tank_vals,
-    dmg_vals,
-    sup_vals,
-    season,
-    month,
-    year,
-    hero_values,
-    hero_ids,
-):
-    # Dropdown (Menge) bleibt nur vom Toggle abhängig
-    dropdown_disabled = not bool(show_history)
-    # Button ist aus, wenn Toggle aus oder alle Einträge gezeigt werden
-    if not show_history:
-        return True, dropdown_disabled
-
-    # Anzeigeanzahl ermitteln
-    display_count = 10
-    try:
-        if isinstance(count_store, dict):
-            display_count = int(count_store.get("count", 10))
-        elif isinstance(count_store, (int, float)):
-            display_count = int(count_store)
-    except Exception:
-        display_count = 10
-
-    tank = tank_vals or []
-    dmg = dmg_vals or []
-    sup = sup_vals or []
-
-    global df
-    if df.empty:
-        # Keine Daten -> Button ausblenden
-        return True, dropdown_disabled
-
-    temp = df.copy()
-    if season and "Season" in temp.columns:
-        temp = temp[temp["Season"] == season]
-    else:
-        if year is not None and "Jahr" in temp.columns:
-            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None and "Monat" in temp.columns:
-            temp = temp[temp["Monat"] == month]
-
-    if temp.empty:
-        return True, dropdown_disabled
-
-    all_players = tank + dmg + sup
-    # Spaltenprüfung
-    for p in all_players:
-        for c in [f"{p} Rolle", f"{p} Hero"]:
-            if c not in temp.columns:
-                return True, dropdown_disabled
-
-    mask = pd.Series(True, index=temp.index)
-    selected_heroes = {}
-    if detail_on:
-        try:
-            if hero_values is not None and hero_ids is not None:
-                for vals, _id in zip(hero_values, hero_ids):
-                    p = _id.get("player") if isinstance(_id, dict) else None
-                    if p and vals:
-                        selected_heroes[p] = set(vals)
-        except Exception:
-            selected_heroes = {}
-
-    if len(tank) == 1:
-        p = tank[0]
-        mask = mask & temp[f"{p} Rolle"].eq("Tank")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in dmg:
-        mask = mask & temp[f"{p} Rolle"].eq("Damage")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-    for p in sup:
-        mask = mask & temp[f"{p} Rolle"].eq("Support")
-        mask = mask & temp[f"{p} Hero"].notna() & (temp[f"{p} Hero"] != "nicht dabei")
-        if p in selected_heroes:
-            mask = mask & temp[f"{p} Hero"].isin(selected_heroes[p])
-
-    total_full = int(mask.sum())
-    # Button deaktivieren, wenn nichts mehr zu laden ist
-    button_disabled = display_count >= total_full or total_full == 0
-    return button_disabled, dropdown_disabled
 
 
 @app.callback(
@@ -2030,7 +1177,7 @@ def update_all_graphs(
                             "Map": map_data["Map"].tolist(),
                             "Mode": ["Gesamt", "Attack", "Defense"],
                         },
-                        custom_data=["Spiele", "Win", "Lose"],
+                        custom_data=["Spiele"],
                         color_discrete_map={
                             "Gesamt": "lightslategrey",
                             "Attack": "#EF553B",
@@ -2038,7 +1185,7 @@ def update_all_graphs(
                         },
                     )
                     bar_fig.update_traces(
-                        hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>"
+                        hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>"
                     )
                     bar_fig.update_layout(yaxis_tickformat=".0%")
                 else:
@@ -2103,8 +1250,8 @@ def update_all_graphs(
                                 x=stats[group_col],
                                 y=stats[y_col],
                                 name=name,
-                                customdata=stats[["Spiele", "Win", "Lose"]],
-                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>",
+                                customdata=stats[["Spiele"]],
+                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
                             )
                         )
                 else:
@@ -2183,8 +1330,8 @@ def update_all_graphs(
                                 x=stats[group_col],
                                 y=stats[y_col],
                                 name=name,
-                                customdata=stats[["Spiele", "Win", "Lose"]],
-                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>",
+                                customdata=stats[["Spiele"]],
+                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<extra></extra>",
                             )
                         )
                 else:
@@ -2234,57 +1381,9 @@ def update_all_graphs(
                     aspect="auto",
                     title=f"Winrate Heatmap – {player}",
                 )
-                # Zusatzdaten für Tooltip: Spiele, Gewonnen, Verloren
-                try:
-                    total_pivot = (
-                        main_df.pivot_table(
-                            index="Rolle",
-                            columns="Map",
-                            values="Win Lose",
-                            aggfunc="count",
-                        )
-                        .reindex(index=pivot.index, columns=pivot.columns)
-                        .fillna(0)
-                        .astype(int)
-                    )
-                    wins_pivot = (
-                        main_df.pivot_table(
-                            index="Rolle",
-                            columns="Map",
-                            values="Win Lose",
-                            aggfunc=lambda x: (x == "Win").sum(),
-                        )
-                        .reindex(index=pivot.index, columns=pivot.columns)
-                        .fillna(0)
-                        .astype(int)
-                    )
-                    losses_pivot = (total_pivot - wins_pivot).astype(int)
-                    customdata = [
-                        [
-                            [
-                                int(total_pivot.iloc[i, j]),
-                                int(wins_pivot.iloc[i, j]),
-                                int(losses_pivot.iloc[i, j]),
-                            ]
-                            for j in range(total_pivot.shape[1])
-                        ]
-                        for i in range(total_pivot.shape[0])
-                    ]
-                    heatmap_fig.data[0].customdata = customdata
-                    heatmap_fig.update_traces(
-                        hovertemplate=(
-                            "<b>Map: %{x}</b><br><b>Rolle: %{y}</b>"
-                            "<br><b>Winrate: %{z: .1%}</b>"
-                            "<br>Spiele: %{customdata[0]}"
-                            "<br>Gewonnen: %{customdata[1]}"
-                            "<br>Verloren: %{customdata[2]}<extra></extra>"
-                        )
-                    )
-                except Exception:
-                    # Fallback: nur Winrate anzeigen
-                    heatmap_fig.update_traces(
-                        hovertemplate="<b>Map: %{x}</b><br><b>Rolle: %{y}</b><br><b>Winrate: %{z: .1%}</b><extra></extra>"
-                    )
+                heatmap_fig.update_traces(
+                    hovertemplate="<b>Map: %{x}</b><br><b>Rolle: %{y}</b><br><b>Winrate: %{z: .1%}</b><extra></extra>"
+                )
         except Exception:
             pass
     winrate_fig = go.Figure()
@@ -2300,15 +1399,12 @@ def update_all_graphs(
                 time_data["CumulativeWinrate"] = (
                     time_data["Win"].cumsum() / time_data["GameNum"]
                 )
-                time_data["CumWins"] = time_data["Win"].cumsum()
-                time_data["CumLosses"] = time_data["GameNum"] - time_data["CumWins"]
                 winrate_fig.add_trace(
                     go.Scatter(
                         x=time_data["GameNum"],
                         y=time_data["CumulativeWinrate"],
                         mode="lines",
                         name=name,
-                        customdata=time_data[["CumWins", "CumLosses"]].values,
                     )
                 )
     winrate_fig.update_layout(
@@ -2319,12 +1415,7 @@ def update_all_graphs(
         legend_title="Spieler",
     )
     winrate_fig.update_traces(
-        hovertemplate=(
-            "<b>Spielnummer: %{x}</b>"
-            "<br><b>Winrate: %{y: .1%}</b>"
-            "<br>Gewonnen: %{customdata[0]}"
-            "<br>Verloren: %{customdata[1]}<extra></extra>"
-        )
+        hovertemplate="<b>Spielnummer: %{x}</b><br><b>Winrate: %{y: .1%}</b><extra></extra>"
     )
     if not winrate_fig.data:
         winrate_fig = empty_fig
