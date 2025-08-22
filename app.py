@@ -4,6 +4,8 @@
 import os
 import re
 from io import StringIO
+import hashlib
+import json
 
 # Third-party
 import pandas as pd
@@ -12,6 +14,7 @@ import plotly.graph_objects as go
 import requests
 import dash_bootstrap_components as dbc
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from flask import request
 
 # --- Local Imports ---
 import constants
@@ -25,6 +28,10 @@ app = Dash(
 )
 server = app.server
 df = pd.DataFrame()
+# In-Memory cache markers for conditional downloads
+_last_etag = None
+_last_modified = None
+_last_hash = None
 
 
 # --- Data Loading ---
@@ -90,12 +97,111 @@ def load_data(use_local=True):
 load_data(use_local=True)
 
 
+# --- Minimal Cloud Updater (no UI changes) ---
+def _fetch_update_from_cloud(force: bool = False) -> bool:
+    """Return True if data updated, otherwise False. Uses ETag/Last-Modified and content hash in memory.
+    Keeps UI unchanged and only refreshes when something changed."""
+    global _last_etag, _last_modified, _last_hash
+    headers = {}
+    if not force:
+        if _last_etag:
+            headers["If-None-Match"] = _last_etag
+        if _last_modified:
+            headers["If-Modified-Since"] = _last_modified
+    try:
+        resp = requests.get(constants.url, headers=headers, timeout=20)
+    except Exception as e:
+        print(f"Cloud fetch failed: {e}")
+        return False
+
+    if resp.status_code == 304:
+        # Not modified
+        return False
+    if resp.status_code != 200:
+        print(f"Cloud fetch HTTP {resp.status_code}")
+        return False
+
+    text = resp.text or ""
+    new_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+    if not force and _last_hash and new_hash == _last_hash:
+        return False
+
+    try:
+        tmp_df = pd.read_csv(StringIO(text))
+        tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
+        # Reload and normalize via existing loader
+        load_data(use_local=True)
+    except Exception as e:
+        print(f"Download ok, but parse/save failed: {e}")
+        return False
+
+    _last_etag = resp.headers.get("ETag", _last_etag)
+    _last_modified = resp.headers.get("Last-Modified", _last_modified)
+    _last_hash = new_hash
+    return True
+
+
+# One-time lazy cloud check at startup (conditional; no UI impact)
+try:
+    _ = os.environ.get("DISABLE_STARTUP_CLOUD_CHECK", "0")
+    if _ not in ("1", "true", "TRUE"):
+        # Perform a conditional (non-forced) fetch; ignore result silently
+        _fetch_update_from_cloud(force=False)
+except Exception:
+    pass
+
+
+# --- Secure refresh endpoint for external triggers (e.g., GitHub Actions) ---
+@server.route("/refresh-data", methods=["POST"])
+def refresh_data_route():
+    # Verify token from header or query param
+    provided = request.headers.get("X-Refresh-Token") or request.args.get("token")
+    expected = os.environ.get("REFRESH_TOKEN")
+    if not expected or provided != expected:
+        return (
+            json.dumps({"ok": False, "error": "unauthorized"}),
+            401,
+            {"Content-Type": "application/json"},
+        )
+
+    try:
+        updated = _fetch_update_from_cloud(force=True)
+        return (
+            json.dumps(
+                {
+                    "ok": True,
+                    "updated": bool(updated),
+                    "timestamp": str(pd.Timestamp.now()),
+                }
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    except Exception as e:
+        return (
+            json.dumps({"ok": False, "error": str(e)}),
+            500,
+            {"Content-Type": "application/json"},
+        )
+
+
 # --- Layout ---
 app.layout = dbc.Container(
     [
         # Store removed (no longer needed for dropdown-based assignment)
         dcc.Store(id="history-display-count-store", data={"count": 10}),
         dcc.Store(id="role-history-count-store", data={"count": 10}),
+        # Hidden periodic auto-update (no UI elements added)
+        dcc.Interval(
+            id="auto-update-tick",
+            interval=(
+                int(
+                    os.environ.get("AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES)
+                )
+                * 60
+                * 1000
+            ),
+        ),
         dbc.Row(
             [
                 dbc.Col(
@@ -1000,12 +1106,22 @@ def build_detailed_hero_selectors(
 @app.callback(
     Output("dummy-output", "children"),
     Input("update-data-button", "n_clicks"),
+    Input("auto-update-tick", "n_intervals"),
     prevent_initial_call=True,
 )
-def update_data(n_clicks):
-    if n_clicks > 0:
-        load_data(use_local=False)
-    return f"Data updated at {pd.Timestamp.now()}"
+def update_data(n_clicks, n_intervals):
+    triggered = ctx.triggered_id if ctx.triggered_id else None
+    if triggered == "update-data-button" and (n_clicks or 0) > 0:
+        updated = _fetch_update_from_cloud(force=True)
+        if updated:
+            return f"Data updated at {pd.Timestamp.now()}"
+        return no_update
+    if triggered == "auto-update-tick":
+        updated = _fetch_update_from_cloud(force=False)
+        if updated:
+            return f"Data updated at {pd.Timestamp.now()}"
+        return no_update
+    return no_update
 
 
 @app.callback(
