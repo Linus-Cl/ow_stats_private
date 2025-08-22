@@ -1,6 +1,8 @@
 ## Overwatch Stats (Private)
 
-This is a private Overwatch stats dashboard for me and my friends. It’s tailored to our sheet format and hosting setup and is not meant as a reusable framework. The public, general-purpose version lives in a different repository.
+This is a private Overwatch stats dashboard for me and my friends. It’s tailored to our sheet format and hosting setup and is not meant as a reusable framework. The public, general-purpose version lives in a different repository. 
+
+Feel free to take a look at : https://retrac.pythonanywhere.com/ 
 
 Key points:
 - Private codebase, opinionated to our data and workflow.
@@ -92,4 +94,3 @@ The app normalizes role labels (DPS → Damage, etc.). Date column `Datum` is pa
 
 ## Notes
 - This repository is private and tailored to our data and usage. For a public, reusable solution, see the separate open-source repo.
-- The live demo mentioned in older docs is not part of this private version.
