@@ -192,6 +192,15 @@ def tr(key: str, lang: str) -> str:
         "invalid_date": {"en": "Invalid Date", "de": "Ungültiges Datum"},
         "unknown_map": {"en": "Unknown Map", "de": "Unbekannte Map"},
         "role_label": {"en": "Role", "de": "Rolle"},
+        "players": {"en": "Players", "de": "Spieler"},
+        "by": {"en": "by", "de": "nach"},
+        "distribution": {"en": "Distribution", "de": "Verteilung"},
+        "hero_label": {"en": "Hero", "de": "Held"},
+        "map_label": {"en": "Map", "de": "Map"},
+        "gamemode_label": {"en": "Gamemode", "de": "Gamemode"},
+        "attackdef_label": {"en": "Attack/Defense", "de": "Attack/Defense"},
+        "side": {"en": "Side", "de": "Seite"},
+        "game_number": {"en": "Game number", "de": "Spielnummer"},
     }
     v = T.get(key, {})
     return v.get(lang, v.get("en", key))
@@ -2872,6 +2881,12 @@ def update_all_graphs(
 
     # (The rest of the function remains completely unchanged)
     map_stat_output = None
+
+    # Localized translation with defaults helper
+    def trd(key, de_default, en_default):
+        v = tr(key, lang_for_text)
+        return v if v != key else (de_default if lang_for_text == "de" else en_default)
+
     attack_def_modes = ["Attack", "Defense", "Attack Attack"]
     bar_fig = go.Figure()
     if (
@@ -2884,8 +2899,9 @@ def update_all_graphs(
             map_data = map_data[map_data["Spiele"] >= min_games]
             if not map_data.empty:
                 plot_df = main_df[main_df["Attack Def"].isin(attack_def_modes)].copy()
+                overall_label = trd("overall", "Gesamt", "Overall")
                 plot_df["Mode"] = plot_df["Attack Def"].replace(
-                    {"Attack Attack": "Gesamt"}
+                    {"Attack Attack": overall_label}
                 )
                 grouped = (
                     plot_df.groupby(["Map", "Mode", "Win Lose"])
@@ -2901,26 +2917,33 @@ def update_all_graphs(
                 plot_data = grouped.reset_index()
                 plot_data = plot_data[plot_data["Map"].isin(map_data["Map"])]
                 if not plot_data.empty:
+                    # Localized labels
+                    detailed_label = trd("detailed", "Detailliert", "Detailed")
                     bar_fig = px.bar(
                         plot_data,
                         x="Map",
                         y="Winrate",
                         color="Mode",
                         barmode="group",
-                        title=f"Map Winrates (Detailliert) - {player}",
+                        title=f"{tr('winrate', lang_for_text)} {tr('by', lang_for_text)} {tr('map_label', lang_for_text)} ({detailed_label}) - {player}",
                         category_orders={
                             "Map": map_data["Map"].tolist(),
-                            "Mode": ["Gesamt", "Attack", "Defense"],
+                            "Mode": [overall_label, "Attack", "Defense"],
                         },
                         custom_data=["Spiele", "Win", "Lose"],
                         color_discrete_map={
-                            "Gesamt": "lightslategrey",
+                            overall_label: "lightslategrey",
                             "Attack": "#EF553B",
                             "Defense": "#636EFA",
                         },
                     )
                     bar_fig.update_traces(
-                        hovertemplate="Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>"
+                        hovertemplate=(
+                            f"{tr('winrate', lang_for_text)}: %{{y:.1%}}"
+                            f"<br>{tr('games', lang_for_text)}: %{{customdata[0]}}"
+                            f"<br>{trd('won','Gewonnen','Won')}: %{{customdata[1]}}"
+                            f"<br>{trd('lost','Verloren','Lost')}: %{{customdata[2]}}<extra></extra>"
+                        )
                     )
                     bar_fig.update_layout(yaxis_tickformat=".0%")
                 else:
@@ -2942,14 +2965,18 @@ def update_all_graphs(
                     .reset_index(name="TotalSpiele")
                     .sort_values("TotalSpiele", ascending=False)
                 )
+                detailed_label = trd("detailed", "Detailliert", "Detailed")
                 bar_fig = px.bar(
                     plays_by_side,
                     x="Map",
                     y="Spiele",
                     color="Seite",
                     barmode="stack",
-                    title=f"Spiele pro Map (Detailliert) - {player}",
-                    labels={"Spiele": "Anzahl Spiele", "Seite": "Seite"},
+                    title=f"{tr('games', lang_for_text)} {tr('by', lang_for_text)} {tr('map_label', lang_for_text)} ({detailed_label}) - {player}",
+                    labels={
+                        "Spiele": tr("games", lang_for_text),
+                        "Seite": tr("side", lang_for_text),
+                    },
                     category_orders={"Map": list(total_plays_map["Map"])},
                     color_discrete_map={
                         "Attack": "#EF553B",
@@ -2986,7 +3013,12 @@ def update_all_graphs(
                                 y=stats[y_col],
                                 name=name,
                                 customdata=stats[["Spiele", "Win", "Lose"]],
-                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>",
+                                hovertemplate=(
+                                    f"<b>%{{x}}</b><br>{tr('winrate', lang_for_text)}: %{{y:.1%}}"
+                                    f"<br>{tr('games', lang_for_text)}: %{{customdata[0]}}"
+                                    f"<br>{trd('won','Gewonnen','Won')}: %{{customdata[1]}}"
+                                    f"<br>{trd('lost','Verloren','Lost')}: %{{customdata[2]}}<extra></extra>"
+                                ),
                             )
                         )
                 else:
@@ -3002,16 +3034,27 @@ def update_all_graphs(
                                 x=stats[group_col],
                                 y=stats[y_col],
                                 name=name,
-                                hovertemplate="<b>%{x}</b><br>Spiele: %{y}<extra></extra>",
+                                hovertemplate=f"<b>%{{x}}</b><br>{tr('games', lang_for_text)}: %{{y}}<extra></extra>",
                             )
                         )
         # Build a safe, human-friendly title even if something was None previously
         safe_map_title = (map_stat_type or "winrate").title().replace("def", "Def")
+        # Localize title/group labels
+        group_label_local = {
+            "Map": tr("map_label", lang_for_text),
+            "Gamemode": tr("gamemode_label", lang_for_text),
+            "Attack Def": tr("attackdef_label", lang_for_text),
+        }.get(group_col, group_col)
+        stat_label_local = (
+            tr("winrate", lang_for_text)
+            if y_col == "Winrate"
+            else tr("games", lang_for_text)
+        )
         bar_fig.update_layout(
-            title=f"{safe_map_title} nach {group_col} {title_suffix}",
+            title=f"{stat_label_local} {tr('by', lang_for_text)} {group_label_local} {title_suffix}",
             barmode="group",
-            yaxis_title=y_col,
-            legend_title="Spieler",
+            yaxis_title=stat_label_local,
+            legend_title=tr("players", lang_for_text),
         )
         if y_col == "Winrate":
             bar_fig.update_layout(yaxis_tickformat=".0%")
@@ -3038,10 +3081,13 @@ def update_all_graphs(
                     pie_data,
                     names=pie_data_col,
                     values="Spiele",
-                    title=f"Verteilung {pie_data_col}",
+                    title=f"{tr('distribution', lang_for_text)} {({'Gamemode': tr('gamemode_label', lang_for_text), 'Attack Def': tr('attackdef_label', lang_for_text)}.get(pie_data_col, pie_data_col))}",
                 )
                 pie_fig.update_traces(
-                    hovertemplate="<b>%{label}</b><br>Spiele: %{value}<br>Anteil: %{percent}<extra></extra>"
+                    hovertemplate=(
+                        f"<b>%{{label}}</b><br>{tr('games', lang_for_text)}: %{{value}}<br>"
+                        f"{'Anteil' if lang_for_text=='de' else 'Share'}: %{{percent}}<extra></extra>"
+                    )
                 )
             else:
                 pie_fig = empty_fig
@@ -3072,7 +3118,12 @@ def update_all_graphs(
                                 y=stats[y_col],
                                 name=name,
                                 customdata=stats[["Spiele", "Win", "Lose"]],
-                                hovertemplate="<b>%{x}</b><br>Winrate: %{y:.1%}<br>Spiele: %{customdata[0]}<br>Gewonnen: %{customdata[1]}<br>Verloren: %{customdata[2]}<extra></extra>",
+                                hovertemplate=(
+                                    f"<b>%{{x}}</b><br>{tr('winrate', lang_for_text)}: %{{y:.1%}}"
+                                    f"<br>{tr('games', lang_for_text)}: %{{customdata[0]}}"
+                                    f"<br>{trd('won','Gewonnen','Won')}: %{{customdata[1]}}"
+                                    f"<br>{trd('lost','Verloren','Lost')}: %{{customdata[2]}}<extra></extra>"
+                                ),
                             )
                         )
                 else:
@@ -3088,14 +3139,24 @@ def update_all_graphs(
                                 x=stats[group_col],
                                 y=stats[y_col],
                                 name=name,
-                                hovertemplate="<b>%{x}</b><br>Spiele: %{y}<extra></extra>",
+                                hovertemplate=f"<b>%{{x}}</b><br>{tr('games', lang_for_text)}: %{{y}}<extra></extra>",
                             )
                         )
+        group_label_local = {
+            "Hero": tr("hero_label", lang_for_text),
+            "Rolle": tr("role_label", lang_for_text),
+            "Map": tr("map_label", lang_for_text),
+        }.get(group_col, group_col)
+        stat_label_local = (
+            tr("winrate", lang_for_text)
+            if y_col == "Winrate"
+            else tr("games", lang_for_text)
+        )
         fig.update_layout(
-            title=f"{stat_type.title()} nach {group_col} {title_suffix}",
+            title=f"{stat_label_local} {tr('by', lang_for_text)} {group_label_local} {title_suffix}",
             barmode="group",
-            yaxis_title=y_col,
-            legend_title="Spieler",
+            yaxis_title=stat_label_local,
+            legend_title=tr("players", lang_for_text),
         )
         if y_col == "Winrate":
             fig.update_layout(yaxis_tickformat=".0%")
@@ -3120,7 +3181,7 @@ def update_all_graphs(
                     zmin=0,
                     zmax=1,
                     aspect="auto",
-                    title=f"Winrate Heatmap – {player}",
+                    title=f"{tr('winrate', lang_for_text)} Heatmap – {player}",
                 )
                 # Zusatzdaten für Tooltip: Spiele, Gewonnen, Verloren
                 try:
@@ -3161,17 +3222,20 @@ def update_all_graphs(
                     heatmap_fig.data[0].customdata = customdata
                     heatmap_fig.update_traces(
                         hovertemplate=(
-                            "<b>Map: %{x}</b><br><b>Rolle: %{y}</b>"
-                            "<br><b>Winrate: %{z: .1%}</b>"
-                            "<br>Spiele: %{customdata[0]}"
-                            "<br>Gewonnen: %{customdata[1]}"
-                            "<br>Verloren: %{customdata[2]}<extra></extra>"
+                            f"<b>{tr('map_label', lang_for_text)}: %{{x}}</b><br><b>{trd('role_label','Rolle','Role')}: %{{y}}</b>"
+                            f"<br><b>{tr('winrate', lang_for_text)}: %{{z: .1%}}</b>"
+                            f"<br>{tr('games', lang_for_text)}: %{{customdata[0]}}"
+                            f"<br>{trd('won','Gewonnen','Won')}: %{{customdata[1]}}"
+                            f"<br>{trd('lost','Verloren','Lost')}: %{{customdata[2]}}<extra></extra>"
                         )
                     )
                 except Exception:
                     # Fallback: nur Winrate anzeigen
                     heatmap_fig.update_traces(
-                        hovertemplate="<b>Map: %{x}</b><br><b>Rolle: %{y}</b><br><b>Winrate: %{z: .1%}</b><extra></extra>"
+                        hovertemplate=(
+                            f"<b>{tr('map_label', lang_for_text)}: %{{x}}</b><br><b>{trd('role_label','Rolle','Role')}: %{{y}}</b>"
+                            f"<br><b>{tr('winrate', lang_for_text)}: %{{z: .1%}}</b><extra></extra>"
+                        )
                     )
         except Exception:
             pass
@@ -3200,18 +3264,18 @@ def update_all_graphs(
                     )
                 )
     winrate_fig.update_layout(
-        title=f"Winrate-Verlauf {title_suffix}",
+        title=f"{trd('trend','Winrate-Verlauf','Winrate Trend')} {title_suffix}",
         yaxis_tickformat=".0%",
-        yaxis_title="Winrate",
-        xaxis_title="Spielnummer",
-        legend_title="Spieler",
+        yaxis_title=tr("winrate", lang_for_text),
+        xaxis_title=tr("game_number", lang_for_text),
+        legend_title=tr("players", lang_for_text),
     )
     winrate_fig.update_traces(
         hovertemplate=(
-            "<b>Spielnummer: %{x}</b>"
-            "<br><b>Winrate: %{y: .1%}</b>"
-            "<br>Gewonnen: %{customdata[0]}"
-            "<br>Verloren: %{customdata[1]}<extra></extra>"
+            f"<b>{tr('game_number', lang_for_text)}: %{{x}}</b>"
+            f"<br><b>{tr('winrate', lang_for_text)}: %{{y: .1%}}</b>"
+            f"<br>{trd('won','Gewonnen','Won')}: %{{customdata[0]}}"
+            f"<br>{trd('lost','Verloren','Lost')}: %{{customdata[1]}}<extra></extra>"
         )
     )
     if not winrate_fig.data:
