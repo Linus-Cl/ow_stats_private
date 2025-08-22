@@ -32,6 +32,9 @@ df = pd.DataFrame()
 _last_etag = None
 _last_modified = None
 _last_hash = None
+LIGHT_LOGO_SRC = None
+DARK_LOGO_SRC = None
+DARK_LOGO_INVERT = True
 
 
 # --- Data Loading ---
@@ -151,6 +154,55 @@ except Exception:
     pass
 
 
+# --- Branding Helpers (optional custom logos) ---
+def _resolve_brand_logo_sources():
+    """
+    Checks assets/branding/ for optional custom logos:
+    - logo_light.(png|jpg|jpeg|webp|svg)
+    - logo_dark.(png|jpg|jpeg|webp|svg)
+    Returns tuple (light_src, dark_src, dark_invert) where sources are /assets paths.
+    dark_invert True means apply CSS invert filter as fallback when no dark asset is provided.
+    """
+    exts = ["png", "jpg", "jpeg", "webp", "svg"]
+    assets_dir = os.path.join("assets", "branding")
+    light_src = None
+    dark_src = None
+    if os.path.isdir(assets_dir):
+        for ext in exts:
+            p = os.path.join(assets_dir, f"logo_light.{ext}")
+            if os.path.exists(p):
+                light_src = f"/assets/branding/logo_light.{ext}"
+                break
+        for ext in exts:
+            p = os.path.join(assets_dir, f"logo_dark.{ext}")
+            if os.path.exists(p):
+                dark_src = f"/assets/branding/logo_dark.{ext}"
+                break
+    # Fallbacks
+    default_src = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png"
+    if not light_src:
+        light_src = default_src
+    dark_invert = False
+    if not dark_src:
+        # Use same as light and invert as a last resort
+        dark_src = light_src
+        dark_invert = True
+    return light_src, dark_src, dark_invert
+
+
+# Resolve once at startup
+try:
+    LIGHT_LOGO_SRC, DARK_LOGO_SRC, DARK_LOGO_INVERT = _resolve_brand_logo_sources()
+except Exception as _e:
+    LIGHT_LOGO_SRC = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png"
+    DARK_LOGO_SRC = LIGHT_LOGO_SRC
+    DARK_LOGO_INVERT = True
+
+# Force specific dark theme logo per user request
+DARK_LOGO_SRC = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Overwatch_circle_logo2.svg/640px-Overwatch_circle_logo2.svg.png"
+DARK_LOGO_INVERT = False
+
+
 # --- Secure refresh endpoint for external triggers (e.g., GitHub Actions) ---
 @server.route("/refresh-data", methods=["POST"])
 def refresh_data_route():
@@ -186,11 +238,14 @@ def refresh_data_route():
 
 
 # --- Layout ---
-app.layout = dbc.Container(
+app.layout = html.Div(
     [
-        # Store removed (no longer needed for dropdown-based assignment)
         dcc.Store(id="history-display-count-store", data={"count": 10}),
         dcc.Store(id="role-history-count-store", data={"count": 10}),
+        # Persist the chosen theme locally (light/dark)
+        dcc.Store(id="theme-store", data={"dark": False}, storage_type="local"),
+        # Hidden target for clientside side-effects
+        html.Div(id="theme-body-sync", style={"display": "none"}),
         # Hidden periodic auto-update (no UI elements added)
         dcc.Interval(
             id="auto-update-tick",
@@ -202,545 +257,632 @@ app.layout = dbc.Container(
                 * 1000
             ),
         ),
-        dbc.Row(
+        dbc.Container(
             [
-                dbc.Col(
-                    html.Img(
-                        src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png",
-                        height="50px",
-                    ),
-                    width="auto",
-                ),
-                dbc.Col(html.H1("Overwatch Statistics", className="my-4"), width=True),
-                dbc.Col(
-                    dbc.Button(
-                        "Update Data from Cloud",
-                        id="update-data-button",
-                        color="primary",
-                        className="mt-4",
-                    ),
-                    width="auto",
-                ),
-            ],
-            align="center",
-            className="mb-3",
-        ),
-        dbc.Row(
-            [
-                dbc.Col(
+                dbc.Row(
                     [
-                        dbc.Card(
-                            [
-                                dbc.CardHeader(
-                                    "Filter", className="bg-primary text-white"
-                                ),
-                                dbc.CardBody(
-                                    [
-                                        dbc.Label("Spieler auswählen:"),
-                                        dcc.Dropdown(
-                                            id="player-dropdown",
-                                            options=[
-                                                {"label": p, "value": p}
-                                                for p in constants.players
-                                            ],
-                                            value=constants.players[0],
-                                            clearable=False,
-                                            className="mb-3",
-                                        ),
-                                        dbc.Label(
-                                            "Season auswählen (überschreibt Jahr/Monat):"
-                                        ),
-                                        dcc.Dropdown(
-                                            id="season-dropdown",
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
-                                            clearable=True,
-                                        ),
-                                        dbc.Label("Jahr auswählen:"),
-                                        dcc.Dropdown(
-                                            id="year-dropdown",
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
-                                            clearable=True,
-                                        ),
-                                        dbc.Label("Monat auswählen:"),
-                                        dcc.Dropdown(
-                                            id="month-dropdown",
-                                            placeholder="(keine ausgewählt)",
-                                            className="mb-3",
-                                            clearable=True,
-                                        ),
-                                        dbc.Label("Mindestanzahl Spiele:"),
-                                        dcc.Slider(
-                                            id="min-games-slider",
-                                            min=1,
-                                            max=100,
-                                            step=None,
-                                            value=5,
-                                            marks={
-                                                1: "1",
-                                                5: "5",
-                                                10: "10",
-                                                25: "25",
-                                                50: "50",
-                                                75: "75",
-                                                100: "100",
-                                            },
-                                            included=False,
-                                            className="mb-1",
-                                        ),
-                                        html.Div(
-                                            id="slider-hint",
-                                            className="text-muted",
-                                            style={"fontSize": "0.85em"},
-                                        ),
-                                        html.Hr(),
-                                        html.Div(
-                                            id="compare-switches-container",
-                                            className="mt-3",
-                                        ),
-                                    ]
-                                ),
-                            ],
-                            className="mb-4",
-                        )
+                        dbc.Col(
+                            html.Div(
+                                [
+                                    # Brand logos with optional custom assets support
+                                    html.Img(
+                                        src=LIGHT_LOGO_SRC,
+                                        height="50px",
+                                        className="brand-logo light-only",
+                                    ),
+                                    html.Img(
+                                        src=DARK_LOGO_SRC,
+                                        height="50px",
+                                        className=(
+                                            "brand-logo dark-only "
+                                            + ("invert" if DARK_LOGO_INVERT else "")
+                                        ).strip(),
+                                    ),
+                                ]
+                            ),
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            html.H1("Overwatch Statistics", className="my-4"),
+                            width=True,
+                        ),
+                        dbc.Col(
+                            dbc.Button(
+                                "Update Data from Cloud",
+                                id="update-data-button",
+                                color="primary",
+                                className="mt-4",
+                            ),
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            dbc.Switch(
+                                id="theme-toggle",
+                                label="Dark Mode",
+                                value=False,
+                                className="mt-4",
+                            ),
+                            width="auto",
+                        ),
                     ],
-                    width=3,
+                    align="center",
+                    className="mb-3",
                 ),
-                dbc.Col(
+                dbc.Row(
                     [
-                        dbc.Tabs(
+                        dbc.Col(
                             [
-                                dbc.Tab(
-                                    label="Map & Mode Statistik",
-                                    tab_id="tab-map",
-                                    children=[
-                                        dbc.Row(
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader(
+                                            "Filter", className="bg-primary text-white"
+                                        ),
+                                        dbc.CardBody(
                                             [
-                                                dbc.Col(
-                                                    dcc.Dropdown(
-                                                        id="map-stat-type",
-                                                        value="winrate",
-                                                        clearable=False,
-                                                        style={
-                                                            "width": "100%",
-                                                            "margin-bottom": "20px",
-                                                        },
-                                                        options=[
-                                                            {
-                                                                "label": "Winrate nach Map",
-                                                                "value": "winrate",
-                                                            },
-                                                            {
-                                                                "label": "Spiele pro Map",
-                                                                "value": "plays",
-                                                            },
-                                                            {
-                                                                "label": "Gamemode Statistik",
-                                                                "value": "gamemode",
-                                                            },
-                                                            {
-                                                                "label": "Attack/Defense Statistik",
-                                                                "value": "attackdef",
-                                                            },
-                                                        ],
-                                                    ),
-                                                    width=4,
+                                                dbc.Label("Spieler auswählen:"),
+                                                dcc.Dropdown(
+                                                    id="player-dropdown",
+                                                    options=[
+                                                        {"label": p, "value": p}
+                                                        for p in constants.players
+                                                    ],
+                                                    value=constants.players[0],
+                                                    clearable=False,
+                                                    className="mb-3",
                                                 ),
-                                                dbc.Col(
-                                                    html.Div(
-                                                        dbc.Switch(
-                                                            id="map-view-type",
-                                                            label="Detailliert",
-                                                            value=False,
-                                                            className="mt-1",
-                                                        ),
-                                                        id="map-view-type-container",
-                                                        style={"margin-bottom": "20px"},
-                                                    ),
-                                                    width=4,
-                                                    className="d-flex align-items-center",
+                                                dbc.Label(
+                                                    "Season auswählen (überschreibt Jahr/Monat):"
+                                                ),
+                                                dcc.Dropdown(
+                                                    id="season-dropdown",
+                                                    placeholder="(keine ausgewählt)",
+                                                    className="mb-3",
+                                                    clearable=True,
+                                                ),
+                                                dbc.Label("Jahr auswählen:"),
+                                                dcc.Dropdown(
+                                                    id="year-dropdown",
+                                                    placeholder="(keine ausgewählt)",
+                                                    className="mb-3",
+                                                    clearable=True,
+                                                ),
+                                                dbc.Label("Monat auswählen:"),
+                                                dcc.Dropdown(
+                                                    id="month-dropdown",
+                                                    placeholder="(keine ausgewählt)",
+                                                    className="mb-3",
+                                                    clearable=True,
+                                                ),
+                                                dbc.Label("Mindestanzahl Spiele:"),
+                                                dcc.Slider(
+                                                    id="min-games-slider",
+                                                    min=1,
+                                                    max=100,
+                                                    step=None,
+                                                    value=5,
+                                                    marks={
+                                                        1: "1",
+                                                        5: "5",
+                                                        10: "10",
+                                                        25: "25",
+                                                        50: "50",
+                                                        75: "75",
+                                                        100: "100",
+                                                    },
+                                                    included=False,
+                                                    className="mb-1",
+                                                ),
+                                                html.Div(
+                                                    id="slider-hint",
+                                                    className="text-muted",
+                                                    style={"fontSize": "0.85em"},
+                                                ),
+                                                html.Hr(),
+                                                html.Div(
+                                                    id="compare-switches-container",
+                                                    className="mt-3",
                                                 ),
                                             ]
                                         ),
-                                        html.Div(id="map-stat-container"),
                                     ],
-                                ),
-                                dbc.Tab(
-                                    label="Rollen-Zuordnung",
-                                    tab_id="tab-role-assign",
-                                    children=[
-                                        html.P(
-                                            "Weise drei Spieler den Rollen zu. Jeder Spieler darf nur einmal vorkommen."
-                                        ),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Map-Filter (optional)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="role-map-filter",
-                                                            placeholder="Maps wählen",
-                                                            multi=True,
-                                                            clearable=True,
-                                                        ),
-                                                    ],
-                                                    width=6,
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Nicht dabei (Spieler ausschließen)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-bench",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=6,
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Tank (max. 1 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-tank",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Damage (max. 2 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-damage",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        dbc.Label(
-                                                            "Support (max. 2 Spieler)"
-                                                        ),
-                                                        dcc.Dropdown(
-                                                            id="assign-support",
-                                                            options=[],
-                                                            placeholder="Spieler wählen",
-                                                            clearable=True,
-                                                            multi=True,
-                                                        ),
-                                                    ],
-                                                    width=4,
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        # Detaillierter Modus: Heldenauswahl je Spieler
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dbc.Label(
-                                                        "Detaillierter Modus (Helden wählen)"
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Switch(
-                                                        id="role-detailed-toggle",
-                                                        value=False,
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                            ],
-                                            className="align-items-center mb-2",
-                                        ),
-                                        html.Div(
-                                            id="role-detailed-hero-selectors",
-                                            className="mb-3",
-                                        ),
-                                        html.Div(id="role-assign-result"),
-                                        html.Hr(),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dbc.Label(
-                                                        "Passende Matches anzeigen"
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Switch(
-                                                        id="role-history-toggle",
-                                                        value=False,
-                                                    ),
-                                                    width="auto",
-                                                ),
-                                            ],
-                                            className="align-items-center mb-2",
-                                        ),
-                                        html.Div(id="role-assign-history"),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dcc.Dropdown(
-                                                        id="role-history-load-amount-dropdown",
-                                                        options=[
-                                                            {
-                                                                "label": "10 weitere laden",
-                                                                "value": 10,
-                                                            },
-                                                            {
-                                                                "label": "25 weitere laden",
-                                                                "value": 25,
-                                                            },
-                                                            {
-                                                                "label": "50 weitere laden",
-                                                                "value": 50,
-                                                            },
-                                                        ],
-                                                        value=10,
-                                                        clearable=False,
-                                                    ),
-                                                    width={"size": 3, "offset": 3},
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Button(
-                                                        "Mehr anzeigen",
-                                                        id="role-history-load-more",
-                                                        color="secondary",
-                                                        className="w-100",
-                                                    ),
-                                                    width=3,
-                                                ),
-                                            ],
-                                            className="my-3 align-items-center",
-                                            justify="center",
-                                        ),
-                                    ],
-                                ),
-                                dbc.Tab(
-                                    label="Held Statistik",
-                                    tab_id="tab-hero",
-                                    children=[
-                                        dcc.Dropdown(
-                                            id="hero-stat-type",
-                                            value="winrate",
-                                            clearable=False,
-                                            style={
-                                                "width": "300px",
-                                                "margin-bottom": "20px",
-                                            },
-                                            options=[
-                                                {
-                                                    "label": "Winrate nach Held",
-                                                    "value": "winrate",
-                                                },
-                                                {
-                                                    "label": "Spiele pro Held",
-                                                    "value": "plays",
-                                                },
-                                            ],
-                                        ),
-                                        dcc.Graph(id="hero-stat-graph"),
-                                    ],
-                                ),
-                                dbc.Tab(
-                                    label="Rollen Statistik",
-                                    tab_id="tab-role",
-                                    children=[
-                                        dcc.Dropdown(
-                                            id="role-stat-type",
-                                            value="winrate",
-                                            clearable=False,
-                                            style={
-                                                "width": "300px",
-                                                "margin-bottom": "20px",
-                                            },
-                                            options=[
-                                                {
-                                                    "label": "Winrate nach Rolle",
-                                                    "value": "winrate",
-                                                },
-                                                {
-                                                    "label": "Spiele pro Rolle",
-                                                    "value": "plays",
-                                                },
-                                            ],
-                                        ),
-                                        dcc.Graph(id="role-stat-graph"),
-                                    ],
-                                ),
-                                dbc.Tab(
-                                    dcc.Graph(id="performance-heatmap"),
-                                    label="Performance Heatmap",
-                                    tab_id="tab-heatmap",
-                                ),
-                                dbc.Tab(
-                                    label="Winrate Verlauf",
-                                    tab_id="tab-trend",
-                                    children=[
-                                        dbc.Label("Held filtern (optional):"),
-                                        dcc.Dropdown(
-                                            id="hero-filter-dropdown",
-                                            placeholder="Kein Held ausgewählt",
-                                            className="mb-3",
-                                        ),
-                                        dcc.Graph(id="winrate-over-time"),
-                                    ],
-                                ),
-                                dbc.Tab(
-                                    label="Match Verlauf",
-                                    tab_id="tab-history",
-                                    children=[
-                                        dbc.Card(
-                                            dbc.CardBody(
-                                                [
-                                                    dbc.Row(
-                                                        [
-                                                            dbc.Col(
-                                                                [
-                                                                    dbc.Label(
-                                                                        "Spieler filtern:"
-                                                                    ),
-                                                                    dcc.Dropdown(
-                                                                        id="player-dropdown-match-verlauf",
-                                                                        options=[
-                                                                            {
-                                                                                "label": "Alle Spieler",
-                                                                                "value": "ALL",
-                                                                            }
-                                                                        ]
-                                                                        + [
-                                                                            {
-                                                                                "label": player,
-                                                                                "value": player,
-                                                                            }
-                                                                            for player in constants.players
-                                                                        ],
-                                                                        value="ALL",
-                                                                        clearable=False,
-                                                                    ),
-                                                                ],
-                                                                width=6,
-                                                            ),
-                                                            dbc.Col(
-                                                                [
-                                                                    dbc.Label(
-                                                                        "Held filtern:"
-                                                                    ),
-                                                                    dcc.Dropdown(
-                                                                        id="hero-filter-dropdown-match",
-                                                                        placeholder="Alle Helden",
-                                                                        clearable=True,
-                                                                    ),
-                                                                ],
-                                                                width=6,
-                                                            ),
-                                                        ]
-                                                    )
-                                                ]
-                                            ),
-                                            className="mb-3",
-                                        ),
-                                        html.Div(
-                                            id="history-list-container",
-                                            style={
-                                                "maxHeight": "1000px",
-                                                "overflowY": "auto",
-                                            },
-                                        ),
-                                        dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    dcc.Dropdown(
-                                                        id="history-load-amount-dropdown",
-                                                        options=[
-                                                            {
-                                                                "label": "10 weitere laden",
-                                                                "value": 10,
-                                                            },
-                                                            {
-                                                                "label": "25 weitere laden",
-                                                                "value": 25,
-                                                            },
-                                                            {
-                                                                "label": "50 weitere laden",
-                                                                "value": 50,
-                                                            },
-                                                        ],
-                                                        value=10,
-                                                        clearable=False,
-                                                    ),
-                                                    width={"size": 3, "offset": 3},
-                                                ),
-                                                dbc.Col(
-                                                    dbc.Button(
-                                                        "Load More",
-                                                        id="load-more-history-button",
-                                                        color="secondary",
-                                                        className="w-100",
-                                                    ),
-                                                    width=3,
-                                                ),
-                                            ],
-                                            className="my-3 align-items-center",
-                                            justify="center",
-                                        ),
-                                    ],
-                                ),
+                                    className="mb-4",
+                                )
                             ],
-                            id="tabs",
-                            active_tab="tab-map",
-                        )
-                    ],
-                    width=9,
-                ),
-            ]
-        ),
-        dbc.Row(
-            [
-                dbc.Col(
-                    [
-                        dbc.Card(
+                            width=3,
+                        ),
+                        dbc.Col(
                             [
-                                dbc.CardHeader(
-                                    id="stats-header", className="bg-primary text-white"
-                                ),
-                                dbc.CardBody([html.Div(id="stats-container")]),
-                            ]
+                                dbc.Tabs(
+                                    [
+                                        dbc.Tab(
+                                            label="Map & Mode Statistik",
+                                            tab_id="tab-map",
+                                            children=[
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dcc.Dropdown(
+                                                                id="map-stat-type",
+                                                                value="winrate",
+                                                                clearable=False,
+                                                                style={
+                                                                    "width": "100%",
+                                                                    "margin-bottom": "20px",
+                                                                },
+                                                                options=[
+                                                                    {
+                                                                        "label": "Winrate nach Map",
+                                                                        "value": "winrate",
+                                                                    },
+                                                                    {
+                                                                        "label": "Spiele pro Map",
+                                                                        "value": "plays",
+                                                                    },
+                                                                    {
+                                                                        "label": "Gamemode Statistik",
+                                                                        "value": "gamemode",
+                                                                    },
+                                                                    {
+                                                                        "label": "Attack/Defense Statistik",
+                                                                        "value": "attackdef",
+                                                                    },
+                                                                ],
+                                                            ),
+                                                            width=4,
+                                                        ),
+                                                        dbc.Col(
+                                                            html.Div(
+                                                                dbc.Switch(
+                                                                    id="map-view-type",
+                                                                    label="Detailliert",
+                                                                    value=False,
+                                                                    className="mt-1",
+                                                                ),
+                                                                id="map-view-type-container",
+                                                                style={
+                                                                    "margin-bottom": "20px"
+                                                                },
+                                                            ),
+                                                            width=4,
+                                                            className="d-flex align-items-center",
+                                                        ),
+                                                    ]
+                                                ),
+                                                html.Div(id="map-stat-container"),
+                                            ],
+                                        ),
+                                        dbc.Tab(
+                                            label="Rollen-Zuordnung",
+                                            tab_id="tab-role-assign",
+                                            children=[
+                                                html.P(
+                                                    "Weise drei Spieler den Rollen zu. Jeder Spieler darf nur einmal vorkommen."
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            [
+                                                                dbc.Label(
+                                                                    "Map-Filter (optional)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="role-map-filter",
+                                                                    placeholder="Maps wählen",
+                                                                    multi=True,
+                                                                    clearable=True,
+                                                                ),
+                                                            ],
+                                                            width=6,
+                                                        ),
+                                                        dbc.Col(
+                                                            [
+                                                                dbc.Label(
+                                                                    "Nicht dabei (Spieler ausschließen)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="assign-bench",
+                                                                    options=[],
+                                                                    placeholder="Spieler wählen",
+                                                                    clearable=True,
+                                                                    multi=True,
+                                                                ),
+                                                            ],
+                                                            width=6,
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            [
+                                                                dbc.Label(
+                                                                    "Tank (max. 1 Spieler)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="assign-tank",
+                                                                    options=[],
+                                                                    placeholder="Spieler wählen",
+                                                                    clearable=True,
+                                                                    multi=True,
+                                                                ),
+                                                            ],
+                                                            width=4,
+                                                        ),
+                                                        dbc.Col(
+                                                            [
+                                                                dbc.Label(
+                                                                    "Damage (max. 2 Spieler)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="assign-damage",
+                                                                    options=[],
+                                                                    placeholder="Spieler wählen",
+                                                                    clearable=True,
+                                                                    multi=True,
+                                                                ),
+                                                            ],
+                                                            width=4,
+                                                        ),
+                                                        dbc.Col(
+                                                            [
+                                                                dbc.Label(
+                                                                    "Support (max. 2 Spieler)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="assign-support",
+                                                                    options=[],
+                                                                    placeholder="Spieler wählen",
+                                                                    clearable=True,
+                                                                    multi=True,
+                                                                ),
+                                                            ],
+                                                            width=4,
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                # Detaillierter Modus: Heldenauswahl je Spieler
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dbc.Label(
+                                                                "Detaillierter Modus (Helden wählen)"
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                        dbc.Col(
+                                                            dbc.Switch(
+                                                                id="role-detailed-toggle",
+                                                                value=False,
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                    ],
+                                                    className="align-items-center mb-2",
+                                                ),
+                                                html.Div(
+                                                    id="role-detailed-hero-selectors",
+                                                    className="mb-3",
+                                                ),
+                                                html.Div(id="role-assign-result"),
+                                                html.Hr(),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dbc.Label(
+                                                                "Passende Matches anzeigen"
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                        dbc.Col(
+                                                            dbc.Switch(
+                                                                id="role-history-toggle",
+                                                                value=False,
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                    ],
+                                                    className="align-items-center mb-2",
+                                                ),
+                                                html.Div(id="role-assign-history"),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dcc.Dropdown(
+                                                                id="role-history-load-amount-dropdown",
+                                                                options=[
+                                                                    {
+                                                                        "label": "10 weitere laden",
+                                                                        "value": 10,
+                                                                    },
+                                                                    {
+                                                                        "label": "25 weitere laden",
+                                                                        "value": 25,
+                                                                    },
+                                                                    {
+                                                                        "label": "50 weitere laden",
+                                                                        "value": 50,
+                                                                    },
+                                                                ],
+                                                                value=10,
+                                                                clearable=False,
+                                                            ),
+                                                            width={
+                                                                "size": 3,
+                                                                "offset": 3,
+                                                            },
+                                                        ),
+                                                        dbc.Col(
+                                                            dbc.Button(
+                                                                "Mehr anzeigen",
+                                                                id="role-history-load-more",
+                                                                color="secondary",
+                                                                className="w-100",
+                                                            ),
+                                                            width=3,
+                                                        ),
+                                                    ],
+                                                    className="my-3 align-items-center",
+                                                    justify="center",
+                                                ),
+                                            ],
+                                        ),
+                                        dbc.Tab(
+                                            label="Held Statistik",
+                                            tab_id="tab-hero",
+                                            children=[
+                                                dcc.Dropdown(
+                                                    id="hero-stat-type",
+                                                    value="winrate",
+                                                    clearable=False,
+                                                    style={
+                                                        "width": "300px",
+                                                        "margin-bottom": "20px",
+                                                    },
+                                                    options=[
+                                                        {
+                                                            "label": "Winrate nach Held",
+                                                            "value": "winrate",
+                                                        },
+                                                        {
+                                                            "label": "Spiele pro Held",
+                                                            "value": "plays",
+                                                        },
+                                                    ],
+                                                ),
+                                                dcc.Graph(id="hero-stat-graph"),
+                                            ],
+                                        ),
+                                        dbc.Tab(
+                                            label="Rollen Statistik",
+                                            tab_id="tab-role",
+                                            children=[
+                                                dcc.Dropdown(
+                                                    id="role-stat-type",
+                                                    value="winrate",
+                                                    clearable=False,
+                                                    style={
+                                                        "width": "300px",
+                                                        "margin-bottom": "20px",
+                                                    },
+                                                    options=[
+                                                        {
+                                                            "label": "Winrate nach Rolle",
+                                                            "value": "winrate",
+                                                        },
+                                                        {
+                                                            "label": "Spiele pro Rolle",
+                                                            "value": "plays",
+                                                        },
+                                                    ],
+                                                ),
+                                                dcc.Graph(id="role-stat-graph"),
+                                            ],
+                                        ),
+                                        dbc.Tab(
+                                            dcc.Graph(id="performance-heatmap"),
+                                            label="Performance Heatmap",
+                                            tab_id="tab-heatmap",
+                                        ),
+                                        dbc.Tab(
+                                            label="Winrate Verlauf",
+                                            tab_id="tab-trend",
+                                            children=[
+                                                dbc.Label("Held filtern (optional):"),
+                                                dcc.Dropdown(
+                                                    id="hero-filter-dropdown",
+                                                    placeholder="Kein Held ausgewählt",
+                                                    className="mb-3",
+                                                ),
+                                                dcc.Graph(id="winrate-over-time"),
+                                            ],
+                                        ),
+                                        dbc.Tab(
+                                            label="Match Verlauf",
+                                            tab_id="tab-history",
+                                            children=[
+                                                dbc.Card(
+                                                    dbc.CardBody(
+                                                        [
+                                                            dbc.Row(
+                                                                [
+                                                                    dbc.Col(
+                                                                        [
+                                                                            dbc.Label(
+                                                                                "Spieler filtern:"
+                                                                            ),
+                                                                            dcc.Dropdown(
+                                                                                id="player-dropdown-match-verlauf",
+                                                                                options=[
+                                                                                    {
+                                                                                        "label": "Alle Spieler",
+                                                                                        "value": "ALL",
+                                                                                    }
+                                                                                ]
+                                                                                + [
+                                                                                    {
+                                                                                        "label": player,
+                                                                                        "value": player,
+                                                                                    }
+                                                                                    for player in constants.players
+                                                                                ],
+                                                                                value="ALL",
+                                                                                clearable=False,
+                                                                            ),
+                                                                        ],
+                                                                        width=6,
+                                                                    ),
+                                                                    dbc.Col(
+                                                                        [
+                                                                            dbc.Label(
+                                                                                "Held filtern:"
+                                                                            ),
+                                                                            dcc.Dropdown(
+                                                                                id="hero-filter-dropdown-match",
+                                                                                placeholder="Alle Helden",
+                                                                                clearable=True,
+                                                                            ),
+                                                                        ],
+                                                                        width=6,
+                                                                    ),
+                                                                ]
+                                                            )
+                                                        ]
+                                                    ),
+                                                    className="mb-3",
+                                                ),
+                                                html.Div(
+                                                    id="history-list-container",
+                                                    style={
+                                                        "maxHeight": "1000px",
+                                                        "overflowY": "auto",
+                                                    },
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dcc.Dropdown(
+                                                                id="history-load-amount-dropdown",
+                                                                options=[
+                                                                    {
+                                                                        "label": "10 weitere laden",
+                                                                        "value": 10,
+                                                                    },
+                                                                    {
+                                                                        "label": "25 weitere laden",
+                                                                        "value": 25,
+                                                                    },
+                                                                    {
+                                                                        "label": "50 weitere laden",
+                                                                        "value": 50,
+                                                                    },
+                                                                ],
+                                                                value=10,
+                                                                clearable=False,
+                                                            ),
+                                                            width={
+                                                                "size": 3,
+                                                                "offset": 3,
+                                                            },
+                                                        ),
+                                                        dbc.Col(
+                                                            dbc.Button(
+                                                                "Load More",
+                                                                id="load-more-history-button",
+                                                                color="secondary",
+                                                                className="w-100",
+                                                            ),
+                                                            width=3,
+                                                        ),
+                                                    ],
+                                                    className="my-3 align-items-center",
+                                                    justify="center",
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                    id="tabs",
+                                    active_tab="tab-map",
+                                )
+                            ],
+                            width=9,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader(
+                                            id="stats-header",
+                                            className="bg-primary text-white",
+                                        ),
+                                        dbc.CardBody([html.Div(id="stats-container")]),
+                                    ]
+                                )
+                            ],
+                            width=12,
                         )
                     ],
-                    width=12,
-                )
+                    className="mt-4",
+                ),
+                html.Div(id="dummy-output", style={"display": "none"}),
             ],
-            className="mt-4",
+            fluid=True,
         ),
-        html.Div(id="dummy-output", style={"display": "none"}),
     ],
-    fluid=True,
+    id="theme-root",
+    className="",
 )
+
+
+# --- Theme toggle (light/dark) ---
+@app.callback(
+    Output("theme-store", "data"),
+    Input("theme-toggle", "value"),
+    State("theme-store", "data"),
+)
+def persist_theme_toggle(is_dark, data):
+    data = data or {}
+    data["dark"] = bool(is_dark)
+    return data
+
+
+@app.callback(Output("theme-root", "className"), Input("theme-store", "data"))
+def apply_theme(data):
+    dark = bool((data or {}).get("dark", False))
+    return "dark" if dark else ""
+
+
+app.clientside_callback(
+    """
+    function(data) {
+        const dark = data && data.dark ? true : false;
+        const doc = document.documentElement;
+        const body = document.body;
+        if (dark) {
+            doc.style.backgroundColor = '#0f1115';
+            body.style.backgroundColor = '#0f1115';
+            doc.style.colorScheme = 'dark';
+        } else {
+            doc.style.backgroundColor = '#ffffff';
+            body.style.backgroundColor = '#ffffff';
+            doc.style.colorScheme = 'light';
+        }
+        return '';
+    }
+    """,
+    Output("theme-body-sync", "children"),
+    Input("theme-store", "data"),
+)
+
+
+@app.callback(Output("theme-toggle", "value"), Input("theme-store", "data"))
+def sync_toggle_from_store(data):
+    return bool((data or {}).get("dark", False))
 
 
 # --- Helper Functions ---
@@ -1884,7 +2026,7 @@ def show_role_assignment_history(
                             html.Img(
                                 src=map_img,
                                 style={
-                                    "width": "80px",
+                                    "width": "120px",
                                     "height": "60px",
                                     "objectFit": "cover",
                                     "borderRadius": "6px",
@@ -2144,6 +2286,7 @@ def toggle_role_history_controls(
     Input({"type": "compare-switch", "player": ALL}, "value"),
     State({"type": "compare-switch", "player": ALL}, "id"),
     Input("dummy-output", "children"),
+    Input("theme-store", "data"),
 )
 def update_all_graphs(
     player,
@@ -2159,7 +2302,27 @@ def update_all_graphs(
     compare_values,
     compare_ids,
     _,
+    theme_data,
 ):
+    # Theme helper for figures
+    dark = bool((theme_data or {}).get("dark", False))
+
+    def style_fig(fig: go.Figure):
+        if not isinstance(fig, go.Figure):
+            return fig
+        template = "plotly_dark" if dark else "plotly_white"
+        paper = "#151925" if dark else "#ffffff"
+        plot = paper
+        layout_kwargs = {
+            "template": template,
+            "paper_bgcolor": paper,
+            "plot_bgcolor": plot,
+        }
+        if dark:
+            layout_kwargs["font_color"] = "#e5e7eb"
+        fig.update_layout(**layout_kwargs)
+        return fig
+
     dataframes = {player: filter_data(player, season, month, year)}
     active_compare_players = []
     if compare_ids:
@@ -2171,6 +2334,7 @@ def update_all_graphs(
     main_df = dataframes[player]
     title_suffix = f"({player}{' vs ' + ', '.join(active_compare_players) if active_compare_players else ''})"
     empty_fig = go.Figure(layout={"title": "Keine Daten für die Auswahl verfügbar"})
+    empty_fig = style_fig(empty_fig)
     stats_header = f"Gesamtstatistiken ({player})"
 
     stats_container = html.Div("Keine Daten für die Auswahl verfügbar.")
@@ -2438,7 +2602,9 @@ def update_all_graphs(
         if not bar_fig.data:
             bar_fig = empty_fig
     if map_stat_type == "winrate":
-        map_stat_output = dbc.Row(dbc.Col(dcc.Graph(figure=bar_fig), width=12))
+        map_stat_output = dbc.Row(
+            dbc.Col(dcc.Graph(figure=style_fig(bar_fig)), width=12)
+        )
     else:
         pie_fig = go.Figure()
         pie_data_col = None
@@ -2464,12 +2630,14 @@ def update_all_graphs(
             else:
                 pie_fig = empty_fig
         if map_stat_type == "plays":
-            map_stat_output = dbc.Row([dbc.Col(dcc.Graph(figure=bar_fig), width=12)])
+            map_stat_output = dbc.Row(
+                [dbc.Col(dcc.Graph(figure=style_fig(bar_fig)), width=12)]
+            )
         else:
             map_stat_output = dbc.Row(
                 [
-                    dbc.Col(dcc.Graph(figure=bar_fig), width=7),
-                    dbc.Col(dcc.Graph(figure=pie_fig), width=5),
+                    dbc.Col(dcc.Graph(figure=style_fig(bar_fig)), width=7),
+                    dbc.Col(dcc.Graph(figure=style_fig(pie_fig)), width=5),
                 ]
             )
 
@@ -2632,6 +2800,11 @@ def update_all_graphs(
     )
     if not winrate_fig.data:
         winrate_fig = empty_fig
+    # Apply theme to the main figures
+    hero_fig = style_fig(hero_fig)
+    role_fig = style_fig(role_fig)
+    heatmap_fig = style_fig(heatmap_fig)
+    winrate_fig = style_fig(winrate_fig)
 
     hero_options = []
     if not main_df.empty:
