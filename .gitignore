@@ -4,3 +4,6 @@
 # Optional: Ignore OS files
 .DS_Store
 __pycache__/
+
+# Local prompts and automation (do not track)
+.prompts/
