@@ -378,6 +378,40 @@ app.layout = dbc.Container(
                                                 dbc.Col(
                                                     [
                                                         dbc.Label(
+                                                            "Map-Filter (optional)"
+                                                        ),
+                                                        dcc.Dropdown(
+                                                            id="role-map-filter",
+                                                            placeholder="Maps wählen",
+                                                            multi=True,
+                                                            clearable=True,
+                                                        ),
+                                                    ],
+                                                    width=6,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label(
+                                                            "Nicht dabei (Spieler ausschließen)"
+                                                        ),
+                                                        dcc.Dropdown(
+                                                            id="assign-bench",
+                                                            options=[],
+                                                            placeholder="Spieler wählen",
+                                                            clearable=True,
+                                                            multi=True,
+                                                        ),
+                                                    ],
+                                                    width=6,
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label(
                                                             "Tank (max. 1 Spieler)"
                                                         ),
                                                         dcc.Dropdown(
@@ -1151,20 +1185,91 @@ def update_filter_options(_):
     Output("assign-tank", "options"),
     Output("assign-damage", "options"),
     Output("assign-support", "options"),
+    Output("assign-bench", "options"),
+    Output("role-map-filter", "options"),
     Input("dummy-output", "children"),
+    Input("assign-tank", "value"),
+    Input("assign-damage", "value"),
+    Input("assign-support", "value"),
+    Input("assign-bench", "value"),
 )
-def populate_role_assignment_options(_):
+def populate_role_assignment_options(_, tank_vals, dmg_vals, sup_vals, bench_vals):
+    # Players
     if df.empty:
-        opts = [{"label": p, "value": p} for p in constants.players]
-        return opts, opts, opts
-    # Derive players from columns ending with ' Rolle'
-    players = []
-    for col in df.columns:
-        if col.endswith(" Rolle"):
-            players.append(col.replace(" Rolle", ""))
-    players = players or constants.players
-    opts = [{"label": p, "value": p} for p in players]
-    return opts, opts, opts
+        players = constants.players
+        maps = []
+    else:
+        players = [
+            col.replace(" Rolle", "") for col in df.columns if col.endswith(" Rolle")
+        ]
+        players = players or constants.players
+        maps = sorted([m for m in df.get("Map", pd.Series()).dropna().unique()])
+
+    tank_vals = tank_vals or []
+    dmg_vals = dmg_vals or []
+    sup_vals = sup_vals or []
+    bench_vals = bench_vals or []
+    selected_any = set(tank_vals + dmg_vals + sup_vals + bench_vals)
+
+    def build_opts(max_count: int, current: list[str]):
+        role_full = len(current) >= max_count
+        res = []
+        for p in players:
+            disabled = False
+            if p in selected_any and p not in current:
+                disabled = True
+            if role_full and p not in current:
+                disabled = True
+            res.append({"label": p, "value": p, "disabled": disabled})
+        return res
+
+    tank_opts = build_opts(1, tank_vals)
+    dmg_opts = build_opts(2, dmg_vals)
+    sup_opts = build_opts(2, sup_vals)
+    bench_opts = []
+    for p in players:
+        bench_opts.append(
+            {
+                "label": p,
+                "value": p,
+                "disabled": p in (set(tank_vals) | set(dmg_vals) | set(sup_vals)),
+            }
+        )
+
+    map_opts = [{"label": m, "value": m} for m in maps]
+    return tank_opts, dmg_opts, sup_opts, bench_opts, map_opts
+
+
+@app.callback(
+    Output("assign-tank", "value"),
+    Output("assign-damage", "value"),
+    Output("assign-support", "value"),
+    Output("assign-bench", "value"),
+    Input("assign-tank", "value"),
+    Input("assign-damage", "value"),
+    Input("assign-support", "value"),
+    Input("assign-bench", "value"),
+)
+def enforce_role_limits(tank_vals, dmg_vals, sup_vals, bench_vals):
+    tank_vals = (tank_vals or [])[:1]
+    dmg_vals = (dmg_vals or [])[:2]
+    sup_vals = (sup_vals or [])[:2]
+    bench_vals = bench_vals or []
+    seen = set()
+
+    def uniq(lst):
+        out = []
+        for x in lst:
+            if x not in seen:
+                out.append(x)
+                seen.add(x)
+        return out
+
+    tank_vals = uniq(tank_vals)
+    dmg_vals = uniq(dmg_vals)
+    sup_vals = uniq(sup_vals)
+    bench_vals = [b for b in bench_vals if b not in seen]
+    return tank_vals, dmg_vals, sup_vals, bench_vals
 
 
 @app.callback(
@@ -1364,6 +1469,8 @@ def update_match_history_hero_options(selected_player, _, current_hero):
     Input("assign-tank", "value"),
     Input("assign-damage", "value"),
     Input("assign-support", "value"),
+    Input("assign-bench", "value"),
+    Input("role-map-filter", "value"),
     Input("role-detailed-toggle", "value"),
     Input("season-dropdown", "value"),
     Input("month-dropdown", "value"),
@@ -1372,7 +1479,17 @@ def update_match_history_hero_options(selected_player, _, current_hero):
     State({"type": "detailed-hero", "player": ALL}, "id"),
 )
 def compute_role_stats(
-    tank_vals, dmg_vals, sup_vals, detail_on, season, month, year, hero_values, hero_ids
+    tank_vals,
+    dmg_vals,
+    sup_vals,
+    bench_vals,
+    maps_selected,
+    detail_on,
+    season,
+    month,
+    year,
+    hero_values,
+    hero_ids,
 ):
     # Normalize inputs to lists
     tank = tank_vals or []
@@ -1391,7 +1508,8 @@ def compute_role_stats(
         )
 
     # Uniqueness
-    all_players = tank + dmg + sup
+    bench = bench_vals or []
+    all_players = tank + dmg + sup + bench
     if len(set(all_players)) != len(all_players):
         return dbc.Alert(
             "Jeder Spieler darf nur einmal vorkommen (über alle Rollen).",
@@ -1404,6 +1522,11 @@ def compute_role_stats(
 
     # Apply timeframe filters
     temp = df.copy()
+    # Apply map filter
+    if maps_selected:
+        temp = temp[temp["Map"].isin(maps_selected)]
+        if temp.empty:
+            return dbc.Alert("Keine Daten für die gewählten Maps.", color="info")
     if season and "Season" in temp.columns:
         temp = temp[temp["Season"] == season]
     else:
@@ -1415,7 +1538,7 @@ def compute_role_stats(
         return dbc.Alert("Keine Daten für den gewählten Zeitraum.", color="info")
 
     # Verify required columns
-    required_cols = ["Win Lose"]
+    required_cols = ["Win Lose", "Map"]
     for p in all_players:
         required_cols += [f"{p} Rolle", f"{p} Hero"]
     missing = [c for c in required_cols if c not in temp.columns]
@@ -1435,6 +1558,10 @@ def compute_role_stats(
                         selected_heroes[p] = set(vals)
         except Exception:
             selected_heroes = {}
+    # Exclude bench players
+    for p in bench:
+        mask = mask & (temp[f"{p} Hero"].isna() | (temp[f"{p} Hero"] == "nicht dabei"))
+
     if len(tank) == 1:
         p = tank[0]
         mask = mask & temp[f"{p} Rolle"].eq("Tank")
@@ -1479,6 +1606,12 @@ def compute_role_stats(
         )
     if sup:
         role_pills.append(dbc.Badge(f"Support: {', '.join(sup)}", color="success"))
+    if bench:
+        role_pills.append(
+            dbc.Badge(
+                f"Nicht dabei: {', '.join(bench)}", color="secondary", className="ms-2"
+            )
+        )
 
     # Optional: aktive Helden-Filter anzeigen
     hero_filters_block = None
@@ -1570,6 +1703,8 @@ def compute_role_stats(
     Input("assign-tank", "value"),
     Input("assign-damage", "value"),
     Input("assign-support", "value"),
+    Input("assign-bench", "value"),
+    Input("role-map-filter", "value"),
     Input("season-dropdown", "value"),
     Input("month-dropdown", "value"),
     Input("year-dropdown", "value"),
@@ -1583,6 +1718,8 @@ def show_role_assignment_history(
     tank_vals,
     dmg_vals,
     sup_vals,
+    bench_vals,
+    maps_selected,
     season,
     month,
     year,
@@ -1603,11 +1740,12 @@ def show_role_assignment_history(
     tank = tank_vals or []
     dmg = dmg_vals or []
     sup = sup_vals or []
+    bench = bench_vals or []
 
     if len(tank) > 1 or len(dmg) > 2 or len(sup) > 2:
         return dbc.Alert("Zu viele Spieler gewählt für die Historie.", color="warning")
 
-    all_players = tank + dmg + sup
+    all_players = tank + dmg + sup + bench
     if len(all_players) == 0:
         return dbc.Alert("Bitte mindestens einen Spieler auswählen.", color="info")
     if len(set(all_players)) != len(all_players):
@@ -1618,6 +1756,10 @@ def show_role_assignment_history(
         return dbc.Alert("Keine Daten geladen.", color="danger")
 
     temp = df.copy()
+    if maps_selected:
+        temp = temp[temp["Map"].isin(maps_selected)]
+        if temp.empty:
+            return dbc.Alert("Keine Daten für die gewählten Maps.", color="info")
     if season and "Season" in temp.columns:
         temp = temp[temp["Season"] == season]
     else:
@@ -1648,6 +1790,8 @@ def show_role_assignment_history(
                         selected_heroes[p] = set(vals)
         except Exception:
             selected_heroes = {}
+    for p in bench:
+        mask = mask & (temp[f"{p} Hero"].isna() | (temp[f"{p} Hero"] == "nicht dabei"))
     if len(tank) == 1:
         p = tank[0]
         mask = mask & temp[f"{p} Rolle"].eq("Tank")
@@ -1675,6 +1819,14 @@ def show_role_assignment_history(
         return dbc.Alert("Keine passenden Matches gefunden.", color="info")
 
     # Kompakte Liste mit Map-Thumbnail, Ergebnis-Badge und Spielerlinien
+    # Ermittele alle bekannten Spieler aus den Spaltennamen (robust ggü. constants.players)
+    known_players = sorted(
+        {
+            c.replace(" Hero", "").replace(" Rolle", "")
+            for c in full_subset.columns
+            if c.endswith(" Hero") or c.endswith(" Rolle")
+        }
+    )
     items = []
     for _, row in subset.iterrows():
         map_name = row.get("Map", "—")
@@ -1707,6 +1859,22 @@ def show_role_assignment_history(
                     f"Support: {p} • {row.get(f'{p} Hero', '—')}", className="small"
                 )
             )
+
+        # Unzugeordnete, aber aktive Spieler (nicht auf der Bank) ebenfalls anzeigen
+        selected_and_bench = set(
+            (tank or []) + (dmg or []) + (sup or []) + (bench or [])
+        )
+        other_players = [p for p in known_players if p not in selected_and_bench]
+        for p in other_players:
+            hero_val = row.get(f"{p} Hero")
+            role_val = row.get(f"{p} Rolle")
+            if pd.notna(hero_val) and hero_val != "nicht dabei":
+                role_label = (
+                    role_val if isinstance(role_val, str) and role_val else "Rolle"
+                )
+                role_lines.append(
+                    html.Div(f"{role_label}: {p} • {hero_val}", className="small")
+                )
 
         items.append(
             dbc.ListGroupItem(
@@ -1767,6 +1935,8 @@ def show_role_assignment_history(
     Input("assign-tank", "value"),
     Input("assign-damage", "value"),
     Input("assign-support", "value"),
+    Input("assign-bench", "value"),
+    Input("role-map-filter", "value"),
     Input("season-dropdown", "value"),
     Input("month-dropdown", "value"),
     Input("year-dropdown", "value"),
@@ -1781,6 +1951,8 @@ def update_role_history_count(
     tank_vals,
     dmg_vals,
     sup_vals,
+    bench_vals,
+    maps_selected,
     season,
     month,
     year,
@@ -1802,6 +1974,8 @@ def update_role_history_count(
         "assign-tank",
         "assign-damage",
         "assign-support",
+        "assign-bench",
+        "role-map-filter",
         "season-dropdown",
         "month-dropdown",
         "year-dropdown",
@@ -1836,6 +2010,8 @@ def update_role_history_count(
     Input("assign-tank", "value"),
     Input("assign-damage", "value"),
     Input("assign-support", "value"),
+    Input("assign-bench", "value"),
+    Input("role-map-filter", "value"),
     Input("season-dropdown", "value"),
     Input("month-dropdown", "value"),
     Input("year-dropdown", "value"),
@@ -1849,6 +2025,8 @@ def toggle_role_history_controls(
     tank_vals,
     dmg_vals,
     sup_vals,
+    bench_vals,
+    maps_selected,
     season,
     month,
     year,
@@ -1874,6 +2052,7 @@ def toggle_role_history_controls(
     tank = tank_vals or []
     dmg = dmg_vals or []
     sup = sup_vals or []
+    bench = bench_vals or []
 
     global df
     if df.empty:
@@ -1881,6 +2060,11 @@ def toggle_role_history_controls(
         return True, dropdown_disabled
 
     temp = df.copy()
+    # Apply map filter first
+    if maps_selected:
+        temp = temp[temp["Map"].isin(maps_selected)]
+        if temp.empty:
+            return True, dropdown_disabled
     if season and "Season" in temp.columns:
         temp = temp[temp["Season"] == season]
     else:
@@ -1892,7 +2076,7 @@ def toggle_role_history_controls(
     if temp.empty:
         return True, dropdown_disabled
 
-    all_players = tank + dmg + sup
+    all_players = tank + dmg + sup + bench
     # Spaltenprüfung
     for p in all_players:
         for c in [f"{p} Rolle", f"{p} Hero"]:
@@ -1910,6 +2094,10 @@ def toggle_role_history_controls(
                         selected_heroes[p] = set(vals)
         except Exception:
             selected_heroes = {}
+
+    # Exclude bench players
+    for p in bench:
+        mask = mask & (temp[f"{p} Hero"].isna() | (temp[f"{p} Hero"] == "nicht dabei"))
 
     if len(tank) == 1:
         p = tank[0]
