@@ -1,0 +1,146 @@
+/* Prevent white overscroll flash and set global background */
+html, body { background-color: #ffffff; }
+#theme-root.dark ~ style, #theme-root.dark ~ link { color-scheme: dark; }
+#theme-root.dark ~ * {}
+#theme-root.dark body, #theme-root.dark html { background-color: #0f1115 !important; }
+#theme-root.dark { background-color: #0f1115; }
+/* Subtle Dark Mode Support */
+/* Light mode is default (no overrides here). When #theme-root has class 'dark', apply dark palette. */
+
+#theme-root.dark {
+	background-color: #0f1115;
+	color: #e5e7eb;
+}
+
+#theme-root.dark .navbar, #theme-root.dark .glass-nav {
+	background-color: #0f131b !important;
+	border-bottom-color: rgba(255,255,255,0.08) !important;
+}
+
+#theme-root.dark .card {
+	background-color: #151925 !important;
+	border-color: rgba(255,255,255,0.08) !important;
+	color: #e5e7eb;
+}
+
+#theme-root.dark .card-header {
+	background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015)) !important;
+}
+
+#theme-root.dark .list-group-item {
+	background-color: #121826 !important;
+	border-color: rgba(255,255,255,0.06) !important;
+	color: #e5e7eb !important;
+}
+
+#theme-root.dark .dropdown-menu, #theme-root.dark .Select-menu-outer, #theme-root.dark .Select-menu, #theme-root.dark .Select-control {
+	background-color: #0f131b !important;
+	color: #e5e7eb !important;
+	border-color: rgba(255,255,255,0.08) !important;
+}
+#theme-root.dark .Select-placeholder { color: #9aa3b2 !important; }
+#theme-root.dark .Select-value, #theme-root.dark .Select-value-label { color: #f3f4f6 !important; }
+#theme-root.dark .Select-option { color: #e5e7eb !important; background-color: transparent !important; }
+#theme-root.dark .Select-option:hover, #theme-root.dark .Select-option.is-focused { background-color: #1a2132 !important; }
+#theme-root.dark .Select-option.is-selected { background-color: #22304a !important; }
+
+#theme-root.dark .form-label, #theme-root.dark label { color: #e5e7eb; }
+
+#theme-root.dark .btn-primary {
+	background-color: #2563eb !important;
+	border-color: #1d4ed8 !important;
+}
+
+#theme-root.dark .text-muted { color: #9ca3af !important; }
+
+#theme-root.dark .table, #theme-root.dark .table-striped > tbody > tr:nth-of-type(odd) > * {
+	color: #e5e7eb;
+}
+
+/* Plotly graphs: keep backgrounds dark for readability */
+#theme-root.dark .js-plotly-plot .plotly .main-svg {
+	filter: drop-shadow(0 8px 16px rgba(0,0,0,0.5));
+}
+
+/* Switches (dbc.Switch / Bootstrap) */
+#theme-root.dark .form-switch .form-check-input {
+	background-color: #1f2937 !important;
+	border-color: rgba(255,255,255,0.2) !important;
+}
+#theme-root.dark .form-switch .form-check-input:checked {
+	background-color: #2563eb !important;
+	border-color: #2563eb !important;
+}
+#theme-root.dark .form-switch .form-check-input:focus {
+	box-shadow: 0 0 0 0.2rem rgba(37,99,235,0.25) !important;
+}
+
+/* Slider (dcc.Slider -> rc-slider) */
+#theme-root.dark .rc-slider-rail { background-color: #2b3446 !important; }
+#theme-root.dark .rc-slider-track { background-color: #2563eb !important; }
+#theme-root.dark .rc-slider-handle {
+	border: 2px solid #60a5fa !important;
+	background-color: #0f131b !important;
+	box-shadow: 0 0 0 2px rgba(37,99,235,0.25) !important;
+}
+#theme-root.dark .rc-slider-handle:hover,
+#theme-root.dark .rc-slider-handle:active,
+#theme-root.dark .rc-slider-handle:focus {
+	border-color: #93c5fd !important;
+	box-shadow: 0 0 0 4px rgba(37,99,235,0.25) !important;
+}
+#theme-root.dark .rc-slider-dot { border-color: #3b4254 !important; background-color: #1a2132 !important; }
+#theme-root.dark .rc-slider-mark-text { color: #cbd5e1 !important; }
+#theme-root.dark .rc-slider-mark-text-active { color: #e5e7eb !important; }
+
+/* Slider (disabled state) */
+#theme-root.dark .rc-slider.rc-slider-disabled { opacity: 1 !important; }
+#theme-root.dark .rc-slider-disabled .rc-slider-rail { background-color: #151a24 !important; }
+#theme-root.dark .rc-slider-disabled .rc-slider-track { background-color: #1e2634 !important; }
+#theme-root.dark .rc-slider-disabled .rc-slider-handle {
+	border: 2px solid #374151 !important;
+	background-color: #0f131b !important;
+	box-shadow: none !important;
+	cursor: not-allowed !important;
+}
+#theme-root.dark .rc-slider-disabled .rc-slider-handle:hover,
+#theme-root.dark .rc-slider-disabled .rc-slider-handle:active,
+#theme-root.dark .rc-slider-disabled .rc-slider-handle:focus {
+	border-color: #374151 !important;
+	box-shadow: none !important;
+}
+#theme-root.dark .rc-slider-disabled .rc-slider-dot { border-color: #202533 !important; background-color: #141a26 !important; }
+#theme-root.dark .rc-slider-disabled .rc-slider-mark-text { color: #6b7280 !important; }
+
+/* Tabs (dbc.Tabs) – soften hover/active backgrounds in dark mode */
+#theme-root.dark .nav-tabs {
+	border-bottom-color: rgba(255,255,255,0.08) !important;
+}
+#theme-root.dark .nav-tabs .nav-link {
+	color: #e5e7eb !important;
+	border-color: transparent !important;
+}
+#theme-root.dark .nav-tabs .nav-link:hover {
+	background-color: #1a2132 !important;
+	color: #e5e7eb !important;
+	border-color: rgba(255,255,255,0.12) rgba(255,255,255,0.12) #0f131b !important;
+}
+#theme-root.dark .nav-tabs .nav-link.active,
+#theme-root.dark .nav-tabs .nav-item.show .nav-link {
+	color: #ffffff !important;
+	background-color: #0f131b !important;
+	border-color: rgba(255,255,255,0.12) rgba(255,255,255,0.12) transparent !important;
+}
+/* Optional: tab content on dark */
+#theme-root.dark .tab-content {
+	background-color: transparent;
+}
+
+/* Brand logo brightness per theme */
+.brand-logo { display: inline-block; }
+.brand-logo.dark-only { display: none; }
+.brand-logo.light-only { display: inline-block; }
+#theme-root.dark .brand-logo.light-only { display: none; }
+#theme-root.dark .brand-logo.dark-only { display: inline-block; }
+/* Only invert if class 'invert' is present (fallback case) */
+#theme-root.dark .brand-logo.dark-only.invert { filter: invert(1) saturate(120%) contrast(105%); }
