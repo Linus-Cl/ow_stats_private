@@ -844,6 +844,7 @@ app.layout = html.Div(
     Output("theme-store", "data"),
     Input("theme-toggle", "value"),
     State("theme-store", "data"),
+    prevent_initial_call=True,
 )
 def persist_theme_toggle(is_dark, data):
     data = data or {}
@@ -880,7 +881,11 @@ app.clientside_callback(
 )
 
 
-@app.callback(Output("theme-toggle", "value"), Input("theme-store", "data"))
+@app.callback(
+    Output("theme-toggle", "value"),
+    Input("theme-store", "data"),
+    prevent_initial_call=False,
+)
 def sync_toggle_from_store(data):
     return bool((data or {}).get("dark", False))
 
