@@ -1345,6 +1345,63 @@ def _md_to_html(md_text: str) -> str:
     return "\n".join(html_parts)
 
 
+def _load_patchnotes_md(lang: str) -> str | None:
+    """Load language-specific patchnotes MD if available, else default."""
+    for name in (
+        ["PATCHNOTES.de.md", "PATCHNOTES.md"]
+        if lang == "de"
+        else ["PATCHNOTES.en.md", "PATCHNOTES.md"]
+    ):
+        if os.path.exists(name):
+            try:
+                with open(name, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                continue
+    return None
+
+
+def _parse_patchnotes_entries(md_text: str) -> list[dict]:
+    """Parse our generated PATCHNOTES.md into entries with date, subject, notes, files."""
+    entries = []
+    lines = md_text.splitlines()
+    i = 0
+    current = None
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("### "):
+            # finalize previous
+            if current:
+                entries.append(current)
+            header = line[4:].strip()
+            # Expected format: YYYY-MM-DD ... — <hash> — <subject>
+            date_part = header.split(" — ")[0].strip()
+            # normalize date to YYYY-MM-DD
+            date_norm = date_part.split(" ")[0]
+            subject = header.split(" — ")[-1].strip()
+            current = {"date": date_norm, "subject": subject, "files": [], "notes": ""}
+            i += 1
+            continue
+        if current is not None:
+            # capture files from lines like "- M app.py" "- A assets/..."
+            m = re.match(r"\s*-\s+([AMDZR])\s+(.+)$", line)
+            if m:
+                current["files"].append(m.group(2).strip())
+            elif line.strip().lower().startswith("- notes:") or line.strip().startswith(
+                "- Notes:"
+            ):
+                # Notes line like "- Notes: ..."
+                note = line.split(":", 1)[1].strip() if ":" in line else ""
+                current["notes"] = note
+            elif line.startswith("### "):
+                # handled above
+                pass
+        i += 1
+    if current:
+        entries.append(current)
+    return entries
+
+
 def _beautify_subject(subj: str, lang: str) -> str:
     s = (subj or "").strip().lower()
     mapping = [
@@ -1853,49 +1910,64 @@ def _describe_change(subj: str, files: list[str] | None, lang: str) -> str:
 def patchnotes_page():
     # Sprache automatisch erkennen (Query > Accept-Language > de)
     lang = _detect_lang()
-
-    commits = _get_patchnotes_commits(200)
-    relevant = [c for c in commits if c.get("relevant")]
+    md = _load_patchnotes_md(lang)
     parts = [
         "<!doctype html>",
         "<html><head><meta charset='utf-8'><title>Patchnotes</title>",
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
-        "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu;max-width:820px;margin:24px auto;padding:0 14px;color:#222} .c{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:10px 0;background:#fff} .meta{color:#6b7280;font-size:12px;margin-top:2px} .tag{display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:999px;padding:2px 10px;font-size:11px;margin-left:8px} h1{font-size:20px;margin:0 0 14px} h2{font-size:15px;margin:4px 0} a{color:#0366d6;text-decoration:none} a:hover{text-decoration:underline}</style>",
+        "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu;max-width:820px;margin:24px auto;padding:0 14px;color:#222} .c{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:10px 0;background:#fff} .meta{color:#6b7280;font-size:12px;margin-top:2px} h1{font-size:20px;margin:0 0 14px} h2{font-size:15px;margin:4px 0} a{color:#0366d6;text-decoration:none} a:hover{text-decoration:underline}</style>",
         "</head><body>",
         ("<h1>Aktualisierungen</h1>" if lang == "de" else "<h1>Updates</h1>"),
     ]
-    if not relevant:
-        # Git-Fallback: PATCHNOTES.md rendern, wenn vorhanden
-        try:
-            with open("PATCHNOTES.md", "r", encoding="utf-8") as f:
-                md = f.read()
-            parts.append(_md_to_html(md))
-        except Exception:
-            parts.append(
-                "<p>Keine Einträge.</p>" if lang == "de" else "<p>No entries.</p>"
-            )
+    if not md:
+        parts.append(
+            "<p>Keine Patchnotes gefunden.</p>"
+            if lang == "de"
+            else "<p>No patch notes found.</p>"
+        )
         parts.append("</body></html>")
         return ("\n".join(parts), 200, {"Content-Type": "text/html; charset=utf-8"})
-    for c in relevant:
-        subj_raw = c.get("subject", "")
+
+    # Parse entries and render minimal, user-friendly cards
+    entries = _parse_patchnotes_entries(md)
+    # relevance: file-based or mapping-based
+    rendered = 0
+    for e in entries:
+        files = e.get("files", [])
+        subj_raw = e.get("subject", "")
+        is_relevant = any(_is_relevant_file(f) for f in files) or bool(
+            _describe_change(subj_raw, files, lang)
+        )
+        if not is_relevant:
+            continue
         subj = _beautify_subject(subj_raw, lang)
-        # Datum hübsch formatieren (YYYY-MM-DD → DD.MM.YYYY)
-        d = (c.get("date") or "").split(" ")[0]
+        # format date
+        d = e.get("date") or ""
         try:
             y, m, da = d.split("-")
             nice_date = f"{da}.{m}.{y}"
         except Exception:
             nice_date = d
         meta = f"{nice_date} • " + ("Web-Update" if lang == "de" else "Web update")
-        desc = _describe_change(
-            subj_raw, [f for f in c.get("files", []) if _is_relevant_file(f)], lang
-        )
+        desc = _describe_change(subj_raw, files, lang)
         if not desc:
-            # Eintrag auslassen, wenn keine sinnvolle Beschreibung vorhanden
+            # fallback to notes only if language matches (simple heuristic)
+            notes = (e.get("notes") or "").strip()
+            if lang == "en" and notes and re.search(r"[A-Za-z]", notes):
+                desc = notes
+            elif lang == "de" and notes and re.search(r"[A-Za-z]", notes):
+                # notes are likely English – skip to avoid mixed language
+                desc = ""
+        if not desc:
             continue
         parts.append(
             f"<div class='c'><h2>{html_std.escape(subj)}</h2><div class='meta'>{html_std.escape(meta)}</div><p>{html_std.escape(desc)}</p></div>"
         )
+        rendered += 1
+        if rendered >= 30:
+            break
+    if rendered == 0:
+        parts.append("<p>Keine Einträge.</p>" if lang == "de" else "<p>No entries.</p>")
     parts.append("</body></html>")
     return ("\n".join(parts), 200, {"Content-Type": "text/html; charset=utf-8"})
 
