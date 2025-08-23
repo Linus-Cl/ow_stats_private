@@ -1272,16 +1272,8 @@ def _get_patchnotes_commits(max_count: int = 100) -> list[dict]:
         )
         text = out.decode("utf-8", errors="ignore")
     except Exception as e:
-        return [
-            {
-                "hash": "",
-                "date": "",
-                "author": "",
-                "subject": f"Unable to load patchnotes: {e}",
-                "files": [],
-                "relevant": False,
-            }
-        ]
+        # Git nicht verfügbar – späterer Fallback liest PATCHNOTES.md
+        return []
 
     commits = []
     current = None
@@ -1307,6 +1299,50 @@ def _get_patchnotes_commits(max_count: int = 100) -> list[dict]:
     for c in commits:
         c["relevant"] = any(_is_relevant_file(f) for f in c.get("files", []))
     return commits
+
+
+def _md_to_html(md_text: str) -> str:
+    """Very small Markdown->HTML for our PATCHNOTES.md subset."""
+    lines = md_text.splitlines()
+    html_parts = []
+    in_ul = False
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if line.strip() == "---":
+            if in_ul:
+                html_parts.append("</ul>")
+                in_ul = False
+            html_parts.append("<hr/>")
+            continue
+        if line.startswith("# "):
+            if in_ul:
+                html_parts.append("</ul>")
+                in_ul = False
+            html_parts.append(f"<h1>{html_std.escape(line[2:].strip())}</h1>")
+            continue
+        if line.startswith("### "):
+            if in_ul:
+                html_parts.append("</ul>")
+                in_ul = False
+            html_parts.append(f"<h3>{html_std.escape(line[4:].strip())}</h3>")
+            continue
+        if line.startswith("- "):
+            if not in_ul:
+                html_parts.append("<ul>")
+                in_ul = True
+            html_parts.append(f"<li>{html_std.escape(line[2:].strip())}</li>")
+            continue
+        if not line.strip():
+            if in_ul:
+                html_parts.append("</ul>")
+                in_ul = False
+            html_parts.append("<br/>")
+            continue
+        # Paragraph fallback
+        html_parts.append(f"<p>{html_std.escape(line)}</p>")
+    if in_ul:
+        html_parts.append("</ul>")
+    return "\n".join(html_parts)
 
 
 def _beautify_subject(subj: str, lang: str) -> str:
@@ -1829,7 +1865,17 @@ def patchnotes_page():
         ("<h1>Aktualisierungen</h1>" if lang == "de" else "<h1>Updates</h1>"),
     ]
     if not relevant:
-        parts.append("<p>Keine Einträge.</p>" if lang == "de" else "<p>No entries.</p>")
+        # Git-Fallback: PATCHNOTES.md rendern, wenn vorhanden
+        try:
+            with open("PATCHNOTES.md", "r", encoding="utf-8") as f:
+                md = f.read()
+            parts.append(_md_to_html(md))
+        except Exception:
+            parts.append(
+                "<p>Keine Einträge.</p>" if lang == "de" else "<p>No entries.</p>"
+            )
+        parts.append("</body></html>")
+        return ("\n".join(parts), 200, {"Content-Type": "text/html; charset=utf-8"})
     for c in relevant:
         subj_raw = c.get("subject", "")
         subj = _beautify_subject(subj_raw, lang)
