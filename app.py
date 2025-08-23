@@ -14,6 +14,9 @@ import plotly.graph_objects as go
 import requests
 import dash_bootstrap_components as dbc
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+import uuid
+import sqlite3
+import time
 from flask import request
 
 # --- Local Imports ---
@@ -35,6 +38,93 @@ _last_hash = None
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
+
+
+@server.route("/bye", methods=["POST"])
+def bye():
+    try:
+        payload = request.get_json(silent=True) or {}
+        sid = payload.get("session_id")
+        if sid:
+            conn = sqlite3.connect(ACTIVE_DB)
+            try:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM active_sessions WHERE session_id = ?", (sid,))
+                conn.commit()
+            finally:
+                conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
+
+
+# --- Active sessions (live online counter) ---
+ACTIVE_DB = os.path.join(os.path.dirname(__file__), "active_sessions.db")
+
+
+def _init_active_db():
+    try:
+        conn = sqlite3.connect(ACTIVE_DB)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_sessions (
+                session_id TEXT PRIMARY KEY,
+                last_seen INTEGER
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _upsert_heartbeat(session_id: str):
+    if not session_id:
+        return
+    now = int(time.time())
+    conn = sqlite3.connect(ACTIVE_DB)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO active_sessions(session_id,last_seen) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET last_seen=excluded.last_seen",
+            (session_id, now),
+        )
+        # Opportunistic cleanup: drop entries older than 2x active window (default 40s)
+        try:
+            active_window = int(os.getenv("ONLINE_ACTIVE_WINDOW_SECONDS", "20"))
+        except Exception:
+            active_window = 20
+        cur.execute(
+            "DELETE FROM active_sessions WHERE last_seen < ?",
+            (now - 2 * active_window,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _count_active(within_seconds: int = None) -> int:
+    if within_seconds is None:
+        try:
+            within_seconds = int(os.getenv("ONLINE_ACTIVE_WINDOW_SECONDS", "20"))
+        except Exception:
+            within_seconds = 20
+    now = int(time.time())
+    threshold = now - within_seconds
+    conn = sqlite3.connect(ACTIVE_DB)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM active_sessions WHERE last_seen >= ?", (threshold,)
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    finally:
+        conn.close()
+
+
+_init_active_db()
 
 
 # --- i18n helper ---
@@ -201,6 +291,7 @@ def tr(key: str, lang: str) -> str:
         "attackdef_label": {"en": "Attack/Defense", "de": "Attack/Defense"},
         "side": {"en": "Side", "de": "Seite"},
         "game_number": {"en": "Game number", "de": "Spielnummer"},
+        "online_now": {"en": "Online", "de": "Online"},
     }
     v = T.get(key, {})
     return v.get(lang, v.get("en", key))
@@ -415,8 +506,12 @@ app.layout = html.Div(
         dcc.Store(id="theme-store", data={"dark": False}, storage_type="local"),
         # Persist the chosen language locally (en/de), default to English
         dcc.Store(id="lang-store", data={"lang": "en"}, storage_type="local"),
+        # Per-tab client id for live counter (session storage)
+        dcc.Store(id="client-id", storage_type="session"),
         # Hidden target for clientside side-effects
         html.Div(id="theme-body-sync", style={"display": "none"}),
+        # Hidden heartbeat output for server-side tracking
+        html.Div(id="heartbeat-dummy", style={"display": "none"}),
         # Hidden periodic auto-update (no UI elements added)
         dcc.Interval(
             id="auto-update-tick",
@@ -428,6 +523,12 @@ app.layout = html.Div(
                 * 1000
             ),
         ),
+        # Init client id once per tab
+        dcc.Interval(id="client-init", interval=1000, n_intervals=0, max_intervals=1),
+        # Heartbeat every 15s
+        dcc.Interval(id="heartbeat", interval=10000, n_intervals=0),
+        # Refresh visible count more frequently
+        dcc.Interval(id="active-count-refresh", interval=5000, n_intervals=0),
         dbc.Container(
             [
                 dbc.Row(
@@ -480,23 +581,49 @@ app.layout = html.Div(
                         dbc.Col(
                             html.Div(
                                 [
-                                    dbc.Button(
-                                        html.Span("🇬🇧", title="English"),
-                                        id="btn-lang-en",
-                                        color="secondary",
-                                        outline=True,
-                                        size="sm",
-                                        className="mt-4 me-1",
+                                    html.Div(
+                                        [
+                                            dbc.Button(
+                                                html.Img(
+                                                    src="https://flagcdn.com/w20/gb.png",
+                                                    title="English",
+                                                    alt="English",
+                                                    style={
+                                                        "height": "16px",
+                                                        "width": "auto",
+                                                    },
+                                                ),
+                                                id="btn-lang-en",
+                                                color="secondary",
+                                                outline=True,
+                                                size="sm",
+                                                className="me-1",
+                                            ),
+                                            dbc.Button(
+                                                html.Img(
+                                                    src="https://flagcdn.com/w20/de.png",
+                                                    title="Deutsch",
+                                                    alt="Deutsch",
+                                                    style={
+                                                        "height": "16px",
+                                                        "width": "auto",
+                                                    },
+                                                ),
+                                                id="btn-lang-de",
+                                                color="secondary",
+                                                outline=True,
+                                                size="sm",
+                                            ),
+                                        ],
+                                        className="d-flex flex-row mt-4 mb-1",
                                     ),
-                                    dbc.Button(
-                                        html.Span("🇩🇪", title="Deutsch"),
-                                        id="btn-lang-de",
+                                    dbc.Badge(
+                                        id="online-counter",
                                         color="secondary",
-                                        outline=True,
-                                        size="sm",
-                                        className="mt-4",
+                                        className="mt-1",
                                     ),
-                                ]
+                                ],
+                                className="d-flex flex-column align-items-start",
                             ),
                             width="auto",
                         ),
@@ -3320,6 +3447,50 @@ def update_all_graphs(
         winrate_fig,
         hero_options,
     )
+
+
+# --- Live online counter callbacks ---
+@app.callback(
+    Output("client-id", "data"),
+    Input("client-init", "n_intervals"),
+    State("client-id", "data"),
+    prevent_initial_call=False,
+)
+def _init_client_id(_, existing):
+    # Keep existing id in session storage to avoid creating duplicates on reload
+    if existing:
+        # Also ensure it is marked active immediately
+        _upsert_heartbeat(existing)
+        return existing
+    try:
+        sid = str(uuid.uuid4())
+    except Exception:
+        sid = str(time.time_ns())
+    # Immediate heartbeat so the counter reflects this session right away
+    _upsert_heartbeat(sid)
+    return sid
+
+
+@app.callback(
+    Output("heartbeat-dummy", "children"),
+    Input("heartbeat", "n_intervals"),
+    State("client-id", "data"),
+)
+def _heartbeat(_n, session_id):
+    _upsert_heartbeat(session_id)
+    return str(int(time.time()))
+
+
+@app.callback(
+    Output("online-counter", "children"),
+    Input("active-count-refresh", "n_intervals"),
+    Input("lang-store", "data"),
+    Input("client-id", "data"),
+)
+def _update_online_counter(_n, lang_data, _sid):
+    lang = (lang_data or {}).get("lang", "en")
+    count = _count_active()
+    return f"{tr('online_now', lang)}: {count}"
 
 
 if __name__ == "__main__":
