@@ -584,7 +584,12 @@ app.layout = html.Div(
                                     html.Div(
                                         [
                                             dbc.Button(
-                                                html.Span("🇬🇧", title="English"),
+                                                html.Img(
+                                                    src="https://flagcdn.com/w20/gb.png",
+                                                    title="English",
+                                                    alt="English",
+                                                    style={"height": "16px", "width": "auto"},
+                                                ),
                                                 id="btn-lang-en",
                                                 color="secondary",
                                                 outline=True,
@@ -592,14 +597,19 @@ app.layout = html.Div(
                                                 className="me-1",
                                             ),
                                             dbc.Button(
-                                                html.Span("🇩🇪", title="Deutsch"),
+                                                html.Img(
+                                                    src="https://flagcdn.com/w20/de.png",
+                                                    title="Deutsch",
+                                                    alt="Deutsch",
+                                                    style={"height": "16px", "width": "auto"},
+                                                ),
                                                 id="btn-lang-de",
                                                 color="secondary",
                                                 outline=True,
                                                 size="sm",
                                             ),
                                         ],
-                                        className="d-flex flex-row mt-4 mb-1",
+                                        className="d-flex flex-row mt-4 mb-1"
                                     ),
                                     dbc.Badge(
                                         id="online-counter",
