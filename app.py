@@ -588,7 +588,10 @@ app.layout = html.Div(
                                                     src="https://flagcdn.com/w20/gb.png",
                                                     title="English",
                                                     alt="English",
-                                                    style={"height": "16px", "width": "auto"},
+                                                    style={
+                                                        "height": "16px",
+                                                        "width": "auto",
+                                                    },
                                                 ),
                                                 id="btn-lang-en",
                                                 color="secondary",
@@ -601,7 +604,10 @@ app.layout = html.Div(
                                                     src="https://flagcdn.com/w20/de.png",
                                                     title="Deutsch",
                                                     alt="Deutsch",
-                                                    style={"height": "16px", "width": "auto"},
+                                                    style={
+                                                        "height": "16px",
+                                                        "width": "auto",
+                                                    },
                                                 ),
                                                 id="btn-lang-de",
                                                 color="secondary",
@@ -609,7 +615,7 @@ app.layout = html.Div(
                                                 size="sm",
                                             ),
                                         ],
-                                        className="d-flex flex-row mt-4 mb-1"
+                                        className="d-flex flex-row mt-4 mb-1",
                                     ),
                                     dbc.Badge(
                                         id="online-counter",
