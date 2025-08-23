@@ -1,4 +1,14 @@
-# Ignore Excel files
+# Local runtime databases
+active_sessions.db
+*.db-journal
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS files
+.DS_Store# Ignore Excel files
 *.xlsx
 
 # Optional: Ignore OS files
@@ -7,6 +17,3 @@ __pycache__/
 
 # Local prompts and automation (do not track)
 .prompts/
-
-# Local data update cache
-.data_cache.json
