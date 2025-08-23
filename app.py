@@ -6,6 +6,8 @@ import re
 from io import StringIO
 import hashlib
 import json
+import subprocess
+import html as html_std
 
 # Third-party
 import pandas as pd
@@ -74,6 +76,15 @@ def _init_active_db():
             )
             """
         )
+        # Shared app state (for cross-worker tokens)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -125,6 +136,30 @@ def _count_active(within_seconds: int = None) -> int:
 
 
 _init_active_db()
+
+
+def _set_app_state(key: str, value: str):
+    try:
+        conn = sqlite3.connect(ACTIVE_DB)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _get_app_state(key: str) -> str | None:
+    conn = sqlite3.connect(ACTIVE_DB)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_state WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 # --- i18n helper ---
@@ -408,8 +443,13 @@ def _fetch_update_from_cloud(force: bool = False) -> bool:
 try:
     _ = os.environ.get("DISABLE_STARTUP_CLOUD_CHECK", "0")
     if _ not in ("1", "true", "TRUE"):
-        # Perform a conditional (non-forced) fetch; ignore result silently
-        _fetch_update_from_cloud(force=False)
+        # Perform a conditional (non-forced) fetch; set token if updated
+        if _fetch_update_from_cloud(force=False):
+            try:
+                if _last_hash:
+                    _set_app_state("data_token", _last_hash)
+            except Exception:
+                pass
 except Exception:
     pass
 
@@ -478,6 +518,12 @@ def refresh_data_route():
 
     try:
         updated = _fetch_update_from_cloud(force=True)
+        if updated:
+            try:
+                if _last_hash:
+                    _set_app_state("data_token", _last_hash)
+            except Exception:
+                pass
         return (
             json.dumps(
                 {
@@ -508,6 +554,8 @@ app.layout = html.Div(
         dcc.Store(id="lang-store", data={"lang": "en"}, storage_type="local"),
         # Per-tab client id for live counter (session storage)
         dcc.Store(id="client-id", storage_type="session"),
+        # Server-side update token (reflects last data update on server)
+        dcc.Store(id="server-update-token", storage_type="memory"),
         # Hidden target for clientside side-effects
         html.Div(id="theme-body-sync", style={"display": "none"}),
         # Hidden heartbeat output for server-side tracking
@@ -522,6 +570,12 @@ app.layout = html.Div(
                 * 60
                 * 1000
             ),
+        ),
+        # Poll the server update token so all sessions pick up data changes
+        dcc.Interval(
+            id="server-update-poll",
+            interval=int(os.environ.get("POLL_UPDATE_SECONDS", "10")) * 1000,
+            n_intervals=0,
         ),
         # Init client id once per tab
         dcc.Interval(id="client-init", interval=1000, n_intervals=0, max_intervals=1),
@@ -1149,6 +1203,21 @@ app.layout = html.Div(
                     className="mt-4",
                 ),
                 html.Div(id="dummy-output", style={"display": "none"}),
+                html.Div(
+                    [
+                        html.A(
+                            id="patchnotes-link",
+                            children="Patchnotes",
+                            href="/patchnotes",
+                            style={
+                                "color": "#6c757d",
+                                "textDecoration": "none",
+                                "fontSize": "0.85em",
+                            },
+                        )
+                    ],
+                    className="text-center my-3",
+                ),
             ],
             fluid=True,
         ),
@@ -1156,6 +1225,633 @@ app.layout = html.Div(
     id="theme-root",
     className="",
 )
+
+
+# --- Patchnotes (from git log) ---
+def _is_relevant_file(path: str) -> bool:
+    if not path:
+        return False
+    p = path.strip()
+    if p == "app.py":
+        return True
+    if p.startswith("assets/"):
+        return True
+    if p == "constants.py":
+        return True
+    if p == "requirements.txt":
+        return True
+    if p.endswith(".md"):
+        return False
+    if p.endswith(".db"):
+        return False
+    if p.startswith(".github/"):
+        return False
+    if p.startswith("scripts/"):
+        return False
+    if p == ".gitignore":
+        return False
+    if p == "PATCHNOTES.md":
+        return False
+    return False
+
+
+def _get_patchnotes_commits(max_count: int = 100) -> list[dict]:
+    try:
+        cmd = [
+            "git",
+            "log",
+            f"-n{max_count}",
+            "--date=iso",
+            "--pretty=format:%H\t%ad\t%an\t%s",
+            "--name-only",
+        ]
+        out = subprocess.check_output(
+            cmd,
+            cwd=os.path.dirname(__file__) or ".",
+            stderr=subprocess.STDOUT,
+        )
+        text = out.decode("utf-8", errors="ignore")
+    except Exception as e:
+        return [
+            {
+                "hash": "",
+                "date": "",
+                "author": "",
+                "subject": f"Unable to load patchnotes: {e}",
+                "files": [],
+                "relevant": False,
+            }
+        ]
+
+    commits = []
+    current = None
+    for line in text.splitlines():
+        if "\t" in line and len(line.split("\t")) >= 4:
+            if current:
+                commits.append(current)
+            parts = line.split("\t", 3)
+            current = {
+                "hash": parts[0],
+                "date": parts[1],
+                "author": parts[2],
+                "subject": parts[3],
+                "files": [],
+                "relevant": False,
+            }
+        else:
+            if current and line.strip():
+                current["files"].append(line.strip())
+    if current:
+        commits.append(current)
+
+    for c in commits:
+        c["relevant"] = any(_is_relevant_file(f) for f in c.get("files", []))
+    return commits
+
+
+def _beautify_subject(subj: str, lang: str) -> str:
+    s = (subj or "").strip().lower()
+    mapping = [
+        # Explicit UI actions and common synonyms
+        ("sync button", {"de": "Sync-Button hinzugefügt", "en": "Added sync button"}),
+        ("update button", {"de": "Sync-Button hinzugefügt", "en": "Added sync button"}),
+        (
+            "refresh button",
+            {"de": "Sync-Button hinzugefügt", "en": "Added sync button"},
+        ),
+        ("reload button", {"de": "Sync-Button hinzugefügt", "en": "Added sync button"}),
+        ("filter to history", {"de": "Filter für Historie", "en": "History filter"}),
+        ("history filter", {"de": "Filter für Historie", "en": "History filter"}),
+        ("filter history", {"de": "Filter für Historie", "en": "History filter"}),
+        (
+            "added filter to history",
+            {"de": "Filter für Historie", "en": "History filter"},
+        ),
+        (
+            "attack/def to history",
+            {
+                "de": "Angriff/Verteidigung in der Historie",
+                "en": "Attack/Defense in history",
+            },
+        ),
+        (
+            "attack-def to history",
+            {
+                "de": "Angriff/Verteidigung in der Historie",
+                "en": "Attack/Defense in history",
+            },
+        ),
+        (
+            "attack def to history",
+            {
+                "de": "Angriff/Verteidigung in der Historie",
+                "en": "Attack/Defense in history",
+            },
+        ),
+        (
+            "atk/def to history",
+            {
+                "de": "Angriff/Verteidigung in der Historie",
+                "en": "Attack/Defense in history",
+            },
+        ),
+        ("patchnotes", {"de": "Patchnotes-Seite", "en": "Patch notes page"}),
+        ("patch notes", {"de": "Patchnotes-Seite", "en": "Patch notes page"}),
+        ("footer link", {"de": "Link im Seitenfuß", "en": "Footer link"}),
+        (
+            "webhook",
+            {
+                "de": "Sicherer Webhook für Datenupdate",
+                "en": "Secure webhook for data update",
+            },
+        ),
+        (
+            "broadcast",
+            {
+                "de": "Updates in allen offenen Sitzungen",
+                "en": "Updates across all open sessions",
+            },
+        ),
+        (
+            "update token",
+            {
+                "de": "Updates in allen offenen Sitzungen",
+                "en": "Updates across all open sessions",
+            },
+        ),
+        (
+            "server-update-token",
+            {
+                "de": "Updates in allen offenen Sitzungen",
+                "en": "Updates across all open sessions",
+            },
+        ),
+        (
+            "data_token",
+            {
+                "de": "Updates in allen offenen Sitzungen",
+                "en": "Updates across all open sessions",
+            },
+        ),
+        (
+            "map thumbnail",
+            {"de": "Breitere Karten-Vorschaubilder", "en": "Wider map thumbnails"},
+        ),
+        (
+            "map width",
+            {"de": "Breitere Karten-Vorschaubilder", "en": "Wider map thumbnails"},
+        ),
+        (
+            "disabled slider",
+            {
+                "de": "Dezenter Stil für deaktivierte Regler",
+                "en": "Subtler style for disabled sliders",
+            },
+        ),
+        (
+            "branding",
+            {"de": "Branding/Logo aktualisiert", "en": "Branding/logo updated"},
+        ),
+        ("logo", {"de": "Branding/Logo aktualisiert", "en": "Branding/logo updated"}),
+        (
+            "added live viewer counter",
+            {"de": "Live-Zähler für geöffnete Seiten", "en": "Live viewer counter"},
+        ),
+        (
+            "language windows fix",
+            {
+                "de": "Sprachauswahl – Windows Fix",
+                "en": "Language selection – Windows fix",
+            },
+        ),
+        (
+            "fixed language select",
+            {"de": "Sprachauswahl verbessert", "en": "Improved language selection"},
+        ),
+        (
+            "added jaina and english version",
+            {
+                "de": "Neue Spielerin Jaina & englische Sprache",
+                "en": "Added Jaina & English version",
+            },
+        ),
+        (
+            "fixed dark mode persitence",
+            {"de": "Dunkelmodus bleibt erhalten", "en": "Dark mode persistence fixed"},
+        ),
+        ("added dark mode", {"de": "Dunkelmodus hinzugefügt", "en": "Added dark mode"}),
+        (
+            "fixed role filter views",
+            {"de": "Rollenfilter verbessert", "en": "Improved role filter views"},
+        ),
+        (
+            "auto update",
+            {"de": "Automatische Datenaktualisierung", "en": "Automatic data update"},
+        ),
+        (
+            "added images to history",
+            {"de": "Bilder in der Match-Historie", "en": "Images in match history"},
+        ),
+        (
+            "added history and comparison mode",
+            {
+                "de": "Historie & Vergleich hinzugefügt",
+                "en": "Added history & comparison",
+            },
+        ),
+        (
+            "added wr over time",
+            {"de": "Winrate-Verlauf hinzugefügt", "en": "Added winrate over time"},
+        ),
+        (
+            "added new stat",
+            {"de": "Neue Statistik hinzugefügt", "en": "Added new statistic"},
+        ),
+        (
+            "added season / date select",
+            {"de": "Filter nach Season/Datum", "en": "Season/date filters"},
+        ),
+        (
+            "fixed detailed view",
+            {"de": "Detailansicht korrigiert", "en": "Fixed detailed view"},
+        ),
+        (
+            "added attack def stats",
+            {"de": "Angriff/Verteidigung-Statistik", "en": "Attack/Defense stats"},
+        ),
+        ("added heatmap", {"de": "Heatmap verbessert", "en": "Heatmap improved"}),
+    ]
+    for key, loc in mapping:
+        if key in s:
+            return loc.get(lang, loc.get("en"))
+    # Fallback: erste Buchstaben groß
+    return subj[:1].upper() + subj[1:]
+
+
+def _detect_lang() -> str:
+    """Detect language from query (?lang=) or Accept-Language header. Defaults to 'de'."""
+    try:
+        q = request.args.get("lang")
+        if q:
+            ql = q.lower()
+            if ql in ("de", "en"):
+                return ql
+        al = request.headers.get("Accept-Language", "")
+        al = al.lower()
+        if "de" in al and not "en" in al.split(",")[0]:
+            return "de"
+        if "en" in al:
+            return "en"
+    except Exception:
+        pass
+    return "de"
+
+
+def _describe_change(subj: str, files: list[str] | None, lang: str) -> str:
+    s = (subj or "").strip().lower()
+    files = files or []
+
+    def de(x: str) -> str:
+        return x
+
+    def en(x: str) -> str:
+        return x
+
+    mapping = [
+        (
+            "sync button",
+            {
+                "de": "Neuer Sync-Button: Damit kannst du die Daten jederzeit manuell aktualisieren – besonders hilfreich, wenn automatische Updates pausieren.",
+                "en": "New sync button: You can manually refresh the data at any time – especially useful when automatic updates are paused.",
+            },
+        ),
+        (
+            "filter to history",
+            {
+                "de": "In der Match-Historie gibt es jetzt einen Filter. So kannst du die Liste eingrenzen und schneller finden, was dich interessiert.",
+                "en": "The match history now has a filter. This lets you narrow the list and find what you need faster.",
+            },
+        ),
+        (
+            "history filter",
+            {
+                "de": "Die Historie lässt sich nun filtern, damit du Einträge gezielt eingrenzen kannst.",
+                "en": "You can now filter the history to narrow down entries.",
+            },
+        ),
+        (
+            "filter history",
+            {
+                "de": "Für die Historie steht ein Filter zur Verfügung, um Einträge schneller zu finden.",
+                "en": "A filter is available for history so you can find entries faster.",
+            },
+        ),
+        (
+            "added filter to history",
+            {
+                "de": "Die Historie hat jetzt einen Filter – für eine fokussierte Ansicht.",
+                "en": "History now includes a filter for a more focused view.",
+            },
+        ),
+        (
+            "attack/def to history",
+            {
+                "de": "In der Match-Historie wird nun zwischen Angriff und Verteidigung unterschieden.",
+                "en": "The match history now distinguishes between attack and defense.",
+            },
+        ),
+        (
+            "attack-def to history",
+            {
+                "de": "Die Historie zeigt jetzt Angriff und Verteidigung getrennt an.",
+                "en": "History now shows attack and defense separately.",
+            },
+        ),
+        (
+            "attack def to history",
+            {
+                "de": "Angriff/Verteidigung ist in der Historie als eigene Information verfügbar.",
+                "en": "Attack/Defense is now available in history as its own information.",
+            },
+        ),
+        (
+            "atk/def to history",
+            {
+                "de": "Atk/Def ist in der Historie sichtbar, um Matches besser einzuordnen.",
+                "en": "Atk/Def is visible in history to better classify matches.",
+            },
+        ),
+        (
+            "update button",
+            {
+                "de": "Neuer Sync-Button: Manuelles Aktualisieren der Daten ist jetzt direkt möglich.",
+                "en": "New sync button: Manual data refresh is now available.",
+            },
+        ),
+        (
+            "refresh button",
+            {
+                "de": "Neuer Sync-Button zum manuellen Aktualisieren der Daten.",
+                "en": "New sync button to manually refresh the data.",
+            },
+        ),
+        (
+            "reload button",
+            {
+                "de": "Neuer Sync-Button zum manuellen Nachladen der Daten.",
+                "en": "New sync button to manually reload the data.",
+            },
+        ),
+        (
+            "patchnotes",
+            {
+                "de": "Es gibt jetzt eine eigene Patchnotes-Seite mit verständlichen Beschreibungen – unauffällig im Footer verlinkt.",
+                "en": "There is now a dedicated patch notes page with clear descriptions – subtly linked in the footer.",
+            },
+        ),
+        (
+            "patch notes",
+            {
+                "de": "Eine neue Patchnotes-Seite fasst Änderungen in ganzen Sätzen zusammen.",
+                "en": "A new patch notes page summarizes changes in full sentences.",
+            },
+        ),
+        (
+            "footer link",
+            {
+                "de": "Im Seitenfuß gibt es einen dezenten Link zu den Patchnotes.",
+                "en": "A subtle link to the patch notes is now available in the footer.",
+            },
+        ),
+        (
+            "webhook",
+            {
+                "de": "Ein sicherer, geheimer Webhook kann die Datenaktualisierung von außen anstoßen (z. B. über einen Scheduler).",
+                "en": "A secure, secret webhook can trigger data updates from outside (e.g., via a scheduler).",
+            },
+        ),
+        (
+            "broadcast",
+            {
+                "de": "Wenn Daten aktualisiert werden, bekommen alle geöffneten Browser-Tabs die Änderung automatisch mit.",
+                "en": "When data updates, all open browser tabs now pick up the change automatically.",
+            },
+        ),
+        (
+            "update token",
+            {
+                "de": "Datenaktualisierungen werden nun zuverlässig an alle Sitzungen verteilt.",
+                "en": "Data updates are now reliably broadcast to all sessions.",
+            },
+        ),
+        (
+            "server-update-token",
+            {
+                "de": "Offene Sitzungen synchronisieren sich automatisch bei Datenänderungen.",
+                "en": "Open sessions automatically synchronize on data changes.",
+            },
+        ),
+        (
+            "data_token",
+            {
+                "de": "Updates werden über einen gemeinsamen Server-Token an alle Clients verteilt.",
+                "en": "Updates are distributed to all clients via a shared server token.",
+            },
+        ),
+        (
+            "map thumbnail",
+            {
+                "de": "Karten-Vorschaubilder sind jetzt breiter – die Zeilenhöhe bleibt gleich für eine ruhige Liste.",
+                "en": "Map thumbnails are wider now – row height remains the same for a calm list.",
+            },
+        ),
+        (
+            "map width",
+            {
+                "de": "Die Breite der Karten-Vorschaubilder wurde erhöht, ohne die Höhe zu vergrößern.",
+                "en": "Increased the width of map thumbnails without increasing row height.",
+            },
+        ),
+        (
+            "disabled slider",
+            {
+                "de": "Deaktivierte Schieberegler wirken im Dunkelmodus dezenter und bleiben gut lesbar.",
+                "en": "Disabled sliders look subtler in dark mode while staying readable.",
+            },
+        ),
+        (
+            "branding",
+            {
+                "de": "Branding/Logo angepasst; Größen und Abstände bleiben erhalten.",
+                "en": "Branding/logo updated; sizes and spacing preserved.",
+            },
+        ),
+        (
+            "logo",
+            {
+                "de": "Logo überarbeitet und sauber eingebunden.",
+                "en": "Logo refined and embedded cleanly.",
+            },
+        ),
+        (
+            "added live viewer counter",
+            {
+                "de": "Es gibt jetzt einen Live-Zähler, der zeigt, wie viele Nutzer die Seite aktuell geöffnet haben.",
+                "en": "There is now a live counter showing how many users currently have the page open.",
+            },
+        ),
+        (
+            "language windows fix",
+            {
+                "de": "Die Sprachanzeige funktioniert nun auch zuverlässig unter Windows.",
+                "en": "Language display now works reliably on Windows as well.",
+            },
+        ),
+        (
+            "fixed language select",
+            {
+                "de": "Die Sprachauswahl wurde stabiler und klarer gestaltet.",
+                "en": "The language selector has been made more stable and clearer.",
+            },
+        ),
+        (
+            "added jaina and english version",
+            {
+                "de": "Neue Spielerin Jaina hinzugefügt und die komplette App ist nun zusätzlich auf Englisch verfügbar.",
+                "en": "Added new player Jaina and provided a complete English version of the app.",
+            },
+        ),
+        (
+            "fixed dark mode persitence",
+            {
+                "de": "Der Dunkelmodus bleibt jetzt zuverlässig erhalten – auch nach einem Neustart.",
+                "en": "Dark mode now reliably persists, even after a restart.",
+            },
+        ),
+        (
+            "added dark mode",
+            {
+                "de": "Ein Dunkelmodus sorgt für bessere Lesbarkeit bei wenig Licht.",
+                "en": "A dark mode improves readability in low-light conditions.",
+            },
+        ),
+        (
+            "fixed role filter views",
+            {
+                "de": "Die Rollenauswahl wurde korrigiert, sodass Überbelegungen vermieden und nicht verfügbare Spieler ausgeblendet werden.",
+                "en": "Role selection was corrected to prevent over-picking and hide unavailable players.",
+            },
+        ),
+        (
+            "auto update",
+            {
+                "de": "Daten werden nun automatisch aus der Cloud aktualisiert; ein manueller Button steht zusätzlich bereit.",
+                "en": "Data now updates automatically from the cloud; a manual button is available as well.",
+            },
+        ),
+        (
+            "added images to history",
+            {
+                "de": "Die Match-Historie zeigt jetzt passende Bilder für Karten und Helden.",
+                "en": "Match history now shows corresponding images for maps and heroes.",
+            },
+        ),
+        (
+            "added history and comparison mode",
+            {
+                "de": "Es gibt eine Historie sowie einen Vergleichsmodus, um Entwicklungen besser nachzuvollziehen.",
+                "en": "Added history and comparison mode to better track changes over time.",
+            },
+        ),
+        (
+            "added wr over time",
+            {
+                "de": "Die Winrate wird jetzt über die Zeit visualisiert.",
+                "en": "Win rate over time is now visualized.",
+            },
+        ),
+        (
+            "added new stat",
+            {
+                "de": "Neue Kennzahlen wurden ergänzt, um Analysen zu verfeinern.",
+                "en": "New metrics were added to refine analysis.",
+            },
+        ),
+        (
+            "added season / date select",
+            {
+                "de": "Filter nach Season und Datum erleichtern die gezielte Auswertung.",
+                "en": "Season and date filters make targeted analysis easier.",
+            },
+        ),
+        (
+            "fixed detailed view",
+            {
+                "de": "Die Detailansicht wurde korrigiert und ist nun übersichtlicher.",
+                "en": "The detailed view was fixed and is now clearer.",
+            },
+        ),
+        (
+            "added attack def stats",
+            {
+                "de": "Angriffs- und Verteidigungsstatistiken wurden ergänzt.",
+                "en": "Added attack and defense statistics.",
+            },
+        ),
+        (
+            "added heatmap",
+            {
+                "de": "Die Heatmap wurde eingeführt bzw. verbessert.",
+                "en": "Introduced or improved the heatmap.",
+            },
+        ),
+    ]
+    for key, loc in mapping:
+        if key in s:
+            return loc.get(lang, loc.get("en"))
+    # Keine generischen Texte mehr – wenn nichts Spezifisches erkannt wird, leer zurückgeben
+    return ""
+
+
+@server.route("/patchnotes")
+def patchnotes_page():
+    # Sprache automatisch erkennen (Query > Accept-Language > de)
+    lang = _detect_lang()
+
+    commits = _get_patchnotes_commits(200)
+    relevant = [c for c in commits if c.get("relevant")]
+    parts = [
+        "<!doctype html>",
+        "<html><head><meta charset='utf-8'><title>Patchnotes</title>",
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+        "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu;max-width:820px;margin:24px auto;padding:0 14px;color:#222} .c{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:10px 0;background:#fff} .meta{color:#6b7280;font-size:12px;margin-top:2px} .tag{display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:999px;padding:2px 10px;font-size:11px;margin-left:8px} h1{font-size:20px;margin:0 0 14px} h2{font-size:15px;margin:4px 0} a{color:#0366d6;text-decoration:none} a:hover{text-decoration:underline}</style>",
+        "</head><body>",
+        ("<h1>Aktualisierungen</h1>" if lang == "de" else "<h1>Updates</h1>"),
+    ]
+    if not relevant:
+        parts.append("<p>Keine Einträge.</p>" if lang == "de" else "<p>No entries.</p>")
+    for c in relevant:
+        subj_raw = c.get("subject", "")
+        subj = _beautify_subject(subj_raw, lang)
+        # Datum hübsch formatieren (YYYY-MM-DD → DD.MM.YYYY)
+        d = (c.get("date") or "").split(" ")[0]
+        try:
+            y, m, da = d.split("-")
+            nice_date = f"{da}.{m}.{y}"
+        except Exception:
+            nice_date = d
+        meta = f"{nice_date} • " + ("Web-Update" if lang == "de" else "Web update")
+        desc = _describe_change(
+            subj_raw, [f for f in c.get("files", []) if _is_relevant_file(f)], lang
+        )
+        if not desc:
+            # Eintrag auslassen, wenn keine sinnvolle Beschreibung vorhanden
+            continue
+        parts.append(
+            f"<div class='c'><h2>{html_std.escape(subj)}</h2><div class='meta'>{html_std.escape(meta)}</div><p>{html_std.escape(desc)}</p></div>"
+        )
+    parts.append("</body></html>")
+    return ("\n".join(parts), 200, {"Content-Type": "text/html; charset=utf-8"})
 
 
 # --- Theme toggle (light/dark) ---
@@ -1404,6 +2100,19 @@ def localize_role_assign(lang_data):
         tr("support_label", lang),
         tr("detailed_mode", lang),
     )
+
+
+# Make footer Patchnotes link follow current UI language
+@app.callback(
+    Output("patchnotes-link", "children"),
+    Output("patchnotes-link", "href"),
+    Input("lang-store", "data"),
+)
+def localize_patchnotes_link(lang_data):
+    lang = (lang_data or {}).get("lang", "en")
+    text = "Patchnotes" if lang == "de" else "Patch notes"
+    href = f"/patchnotes?lang={lang}"
+    return text, href
 
 
 # --- Helper Functions ---
@@ -1813,13 +2522,39 @@ def update_data(n_clicks, n_intervals):
     if triggered == "update-data-button" and (n_clicks or 0) > 0:
         updated = _fetch_update_from_cloud(force=True)
         if updated:
+            # Persist a server-wide token so all workers/sessions can detect the change
+            try:
+                if _last_hash:
+                    _set_app_state("data_token", _last_hash)
+            except Exception:
+                pass
             return f"Data updated at {pd.Timestamp.now()}"
         return no_update
     if triggered == "auto-update-tick":
         updated = _fetch_update_from_cloud(force=False)
         if updated:
+            try:
+                if _last_hash:
+                    _set_app_state("data_token", _last_hash)
+            except Exception:
+                pass
             return f"Data updated at {pd.Timestamp.now()}"
         return no_update
+    return no_update
+
+
+@app.callback(
+    Output("server-update-token", "data"),
+    Input("server-update-poll", "n_intervals"),
+    State("server-update-token", "data"),
+    prevent_initial_call=False,
+)
+def poll_server_update_token(_n, current_token):
+    # Read the server-wide token from the shared DB (cross-worker safe)
+    token = _get_app_state("data_token") or ""
+    # Only trigger downstream updates when the token changed.
+    if token != (current_token or ""):
+        return token
     return no_update
 
 
@@ -2819,6 +3554,7 @@ def toggle_role_history_controls(
     Input({"type": "compare-switch", "player": ALL}, "value"),
     State({"type": "compare-switch", "player": ALL}, "id"),
     Input("dummy-output", "children"),
+    Input("server-update-token", "data"),
     Input("theme-store", "data"),
     Input("lang-store", "data"),
 )
@@ -2836,6 +3572,7 @@ def update_all_graphs(
     compare_values,
     compare_ids,
     _,
+    _server_token,
     theme_data,
     lang_data,
 ):
