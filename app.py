@@ -2841,6 +2841,10 @@ def toggle_view_type_visibility(map_stat_type):
     Input("map-stat-type", "value"),
 )
 def toggle_slider(tab, hero_stat, role_stat, map_stat):
+    # Ensure robust defaults on initial render when dropdown values can be None
+    hero_stat = hero_stat or "winrate"
+    role_stat = role_stat or "winrate"
+    map_stat = map_stat or "winrate"
     if (
         (tab == "tab-hero" and hero_stat == "winrate")
         or (tab == "tab-role" and role_stat == "winrate")
