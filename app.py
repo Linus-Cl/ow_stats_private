@@ -23,6 +23,22 @@ from flask import request
 
 # --- Local Imports ---
 import constants
+from i18n import tr
+from assets_utils import get_map_image_url, get_hero_image_url
+from branding import resolve_brand_logo_sources as _resolve_brand_logo_sources
+from sessions import (
+    ACTIVE_DB,
+    init_active_db as _init_active_db,
+    upsert_heartbeat as _upsert_heartbeat,
+    count_active as _count_active,
+    set_app_state as _set_app_state,
+    get_app_state as _get_app_state,
+)
+from patchnotes_utils import (
+    is_relevant_file as _is_relevant_file,
+    get_patchnotes_commits as _get_patchnotes_commits,
+    md_to_html as _md_to_html,
+)
 
 
 # --- App Initialization ---
@@ -64,102 +80,7 @@ def bye():
 ACTIVE_DB = os.path.join(os.path.dirname(__file__), "active_sessions.db")
 
 
-def _init_active_db():
-    try:
-        conn = sqlite3.connect(ACTIVE_DB)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS active_sessions (
-                session_id TEXT PRIMARY KEY,
-                last_seen INTEGER
-            )
-            """
-        )
-        # Shared app state (for cross-worker tokens)
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_state (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _upsert_heartbeat(session_id: str):
-    if not session_id:
-        return
-    now = int(time.time())
-    conn = sqlite3.connect(ACTIVE_DB)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO active_sessions(session_id,last_seen) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET last_seen=excluded.last_seen",
-            (session_id, now),
-        )
-        # Opportunistic cleanup: drop entries older than 2x active window (default 40s)
-        try:
-            active_window = int(os.getenv("ONLINE_ACTIVE_WINDOW_SECONDS", "20"))
-        except Exception:
-            active_window = 20
-        cur.execute(
-            "DELETE FROM active_sessions WHERE last_seen < ?",
-            (now - 2 * active_window,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _count_active(within_seconds: int = None) -> int:
-    if within_seconds is None:
-        try:
-            within_seconds = int(os.getenv("ONLINE_ACTIVE_WINDOW_SECONDS", "20"))
-        except Exception:
-            within_seconds = 20
-    now = int(time.time())
-    threshold = now - within_seconds
-    conn = sqlite3.connect(ACTIVE_DB)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM active_sessions WHERE last_seen >= ?", (threshold,)
-        )
-        row = cur.fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
-    finally:
-        conn.close()
-
-
 _init_active_db()
-
-
-def _set_app_state(key: str, value: str):
-    try:
-        conn = sqlite3.connect(ACTIVE_DB)
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _get_app_state(key: str) -> str | None:
-    conn = sqlite3.connect(ACTIVE_DB)
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM app_state WHERE key = ?", (key,))
-        row = cur.fetchone()
-        return row[0] if row else None
-    finally:
-        conn.close()
 
 
 # --- i18n helper ---
@@ -455,41 +376,6 @@ except Exception:
 
 
 # --- Branding Helpers (optional custom logos) ---
-def _resolve_brand_logo_sources():
-    """
-    Checks assets/branding/ for optional custom logos:
-    - logo_light.(png|jpg|jpeg|webp|svg)
-    - logo_dark.(png|jpg|jpeg|webp|svg)
-    Returns tuple (light_src, dark_src, dark_invert) where sources are /assets paths.
-    dark_invert True means apply CSS invert filter as fallback when no dark asset is provided.
-    """
-    exts = ["png", "jpg", "jpeg", "webp", "svg"]
-    assets_dir = os.path.join("assets", "branding")
-    light_src = None
-    dark_src = None
-    if os.path.isdir(assets_dir):
-        for ext in exts:
-            p = os.path.join(assets_dir, f"logo_light.{ext}")
-            if os.path.exists(p):
-                light_src = f"/assets/branding/logo_light.{ext}"
-                break
-        for ext in exts:
-            p = os.path.join(assets_dir, f"logo_dark.{ext}")
-            if os.path.exists(p):
-                dark_src = f"/assets/branding/logo_dark.{ext}"
-                break
-    # Fallbacks
-    default_src = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png"
-    if not light_src:
-        light_src = default_src
-    dark_invert = False
-    if not dark_src:
-        # Use same as light and invert as a last resort
-        dark_src = light_src
-        dark_invert = True
-    return light_src, dark_src, dark_invert
-
-
 # Resolve once at startup
 try:
     LIGHT_LOGO_SRC, DARK_LOGO_SRC, DARK_LOGO_INVERT = _resolve_brand_logo_sources()
@@ -1255,94 +1141,7 @@ def _is_relevant_file(path: str) -> bool:
     return False
 
 
-def _get_patchnotes_commits(max_count: int = 100) -> list[dict]:
-    try:
-        cmd = [
-            "git",
-            "log",
-            f"-n{max_count}",
-            "--date=iso",
-            "--pretty=format:%H\t%ad\t%an\t%s",
-            "--name-only",
-        ]
-        out = subprocess.check_output(
-            cmd,
-            cwd=os.path.dirname(__file__) or ".",
-            stderr=subprocess.STDOUT,
-        )
-        text = out.decode("utf-8", errors="ignore")
-    except Exception as e:
-        # Git nicht verfügbar – späterer Fallback liest PATCHNOTES.md
-        return []
-
-    commits = []
-    current = None
-    for line in text.splitlines():
-        if "\t" in line and len(line.split("\t")) >= 4:
-            if current:
-                commits.append(current)
-            parts = line.split("\t", 3)
-            current = {
-                "hash": parts[0],
-                "date": parts[1],
-                "author": parts[2],
-                "subject": parts[3],
-                "files": [],
-                "relevant": False,
-            }
-        else:
-            if current and line.strip():
-                current["files"].append(line.strip())
-    if current:
-        commits.append(current)
-
-    for c in commits:
-        c["relevant"] = any(_is_relevant_file(f) for f in c.get("files", []))
-    return commits
-
-
-def _md_to_html(md_text: str) -> str:
-    """Very small Markdown->HTML for our PATCHNOTES.md subset."""
-    lines = md_text.splitlines()
-    html_parts = []
-    in_ul = False
-    for raw in lines:
-        line = raw.rstrip("\n")
-        if line.strip() == "---":
-            if in_ul:
-                html_parts.append("</ul>")
-                in_ul = False
-            html_parts.append("<hr/>")
-            continue
-        if line.startswith("# "):
-            if in_ul:
-                html_parts.append("</ul>")
-                in_ul = False
-            html_parts.append(f"<h1>{html_std.escape(line[2:].strip())}</h1>")
-            continue
-        if line.startswith("### "):
-            if in_ul:
-                html_parts.append("</ul>")
-                in_ul = False
-            html_parts.append(f"<h3>{html_std.escape(line[4:].strip())}</h3>")
-            continue
-        if line.startswith("- "):
-            if not in_ul:
-                html_parts.append("<ul>")
-                in_ul = True
-            html_parts.append(f"<li>{html_std.escape(line[2:].strip())}</li>")
-            continue
-        if not line.strip():
-            if in_ul:
-                html_parts.append("</ul>")
-                in_ul = False
-            html_parts.append("<br/>")
-            continue
-        # Paragraph fallback
-        html_parts.append(f"<p>{html_std.escape(line)}</p>")
-    if in_ul:
-        html_parts.append("</ul>")
-    return "\n".join(html_parts)
+# (Patchnotes helpers imported at top)
 
 
 def _load_patchnotes_md(lang: str) -> str | None:
@@ -2236,75 +2035,7 @@ def localize_patchnotes_link(lang_data):
 # --- Helper Functions ---
 
 
-def get_map_image_url(map_name):
-    """
-    Generates a URL for a map's background image.
-    Assumes images are in 'assets/maps/' and named like 'map_name.png'.
-    """
-    if not isinstance(map_name, str):
-        return "/assets/maps/default.jpg"  # Fallback for non-string input
-
-    # Clean the map name to create a valid filename
-    # e.g., "King's Row" -> "kings_row"
-    cleaned_name = map_name.lower().replace(" ", "_").replace("'", "")
-
-    # Check for both .jpg and .png extensions
-    for ext in [".jpg", ".png"]:
-        image_filename = f"{cleaned_name}{ext}"
-        # The path Dash uses to serve from the assets folder
-        asset_path = f"/assets/maps/{image_filename}"
-        # The actual file system path to check if the file exists
-        local_path = os.path.join("assets", "maps", image_filename)
-
-        if os.path.exists(local_path):
-            return asset_path
-
-    # If no specific image is found, return the default
-    return "/assets/maps/default.png"
-
-
-def get_hero_image_url(hero_name):
-    """
-    Generates a URL for a hero's portrait with more robust, flexible checking.
-    It tries multiple common filename variations and checks for both .png and .jpg.
-    """
-    if not isinstance(hero_name, str):
-        return "/assets/heroes/default_hero.png"
-
-    base_name = hero_name.lower()
-
-    # --- Create a list of potential filenames to try ---
-    potential_names = []
-
-    # 1. Standard cleaning (e.g., "d.va" -> "dva", "lúcio" -> "lucio")
-    cleaned_base = base_name.replace(".", "").replace(":", "").replace("ú", "u")
-
-    # 2. Add variations for spaces (e.g., "soldier 76" -> "soldier_76" AND "soldier76")
-    potential_names.append(cleaned_base.replace(" ", "_"))
-    potential_names.append(cleaned_base.replace(" ", ""))
-
-    # 3. Add a super-aggressive cleaning as a final fallback (removes all non-letters/numbers)
-    potential_names.append(re.sub(r"[^a-z0-9]", "", base_name))
-
-    # Remove any duplicate names that may have been generated
-    potential_names = list(set(potential_names))
-
-    # --- Now, check if a file exists for any of these variations ---
-    for name in potential_names:
-        if not name:
-            continue  # Skip if cleaning resulted in an empty string
-
-        for ext in [".png", ".jpg", ".jpeg"]:  # Check for all common image extensions
-            image_filename = f"{name}{ext}"
-            asset_path = f"/assets/heroes/{image_filename}"
-            local_path = os.path.join("assets", "heroes", image_filename)
-
-            if os.path.exists(local_path):
-                # We found a match! Return it immediately.
-                return asset_path
-
-    # If after all that, we still can't find it, return the default.
-    return "/assets/heroes/default_hero.png"
+# Asset helpers now imported from assets_utils
 
 
 def create_stat_card(title, image_url, main_text, sub_text):
@@ -2827,7 +2558,8 @@ def reset_compare_switches(selected_player, switch_values):
     Output("map-view-type-container", "style"), Input("map-stat-type", "value")
 )
 def toggle_view_type_visibility(map_stat_type):
-    if map_stat_type in ["winrate", "plays"]:
+    # Treat None (initial render) as 'winrate' to keep the control visible
+    if (map_stat_type or "winrate") in ["winrate", "plays"]:
         return {"display": "block"}
     return {"display": "none"}
 
@@ -2839,19 +2571,37 @@ def toggle_view_type_visibility(map_stat_type):
     Input("hero-stat-type", "value"),
     Input("role-stat-type", "value"),
     Input("map-stat-type", "value"),
+    Input("lang-store", "data"),
 )
-def toggle_slider(tab, hero_stat, role_stat, map_stat):
+def toggle_slider(tab, hero_stat, role_stat, map_stat, lang_data):
     # Ensure robust defaults on initial render when dropdown values can be None
     hero_stat = hero_stat or "winrate"
     role_stat = role_stat or "winrate"
     map_stat = map_stat or "winrate"
+    lang = (lang_data or {}).get("lang", "en")
     if (
         (tab == "tab-hero" and hero_stat == "winrate")
         or (tab == "tab-role" and role_stat == "winrate")
         or (tab == "tab-map" and map_stat in ["winrate", "gamemode", "attackdef"])
     ):
         return False, ""
-    return True, "Nur relevant für Winrate-Statistiken"
+    # Localized hint when disabled
+    return True, tr("only_relevant_winrate", lang)
+
+@app.callback(
+    Output("history-load-amount-dropdown", "options"),
+    Output("history-load-amount-dropdown", "value"),
+    Output("load-more-history-button", "children"),
+    Input("lang-store", "data"),
+)
+def localize_history_controls(lang_data):
+    """Localize the history load controls (amount dropdown + button)."""
+    lang = (lang_data or {}).get("lang", "en")
+    amounts = [10, 25, 50]
+    options = [
+        {"label": tr("load_n_more", lang).format(n=n), "value": n} for n in amounts
+    ]
+    return options, amounts[0], tr("load_more", lang)
 
 
 @app.callback(
