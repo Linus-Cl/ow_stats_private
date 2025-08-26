@@ -2119,9 +2119,12 @@ def apply_language_controls(lang_data):
 
 @app.callback(
     Output("map-stat-type", "options"),
+    Output("map-stat-type", "value"),
     Output("map-view-type", "label"),
     Output("hero-stat-type", "options"),
+    Output("hero-stat-type", "value"),
     Output("role-stat-type", "options"),
+    Output("role-stat-type", "value"),
     Output("role-map-filter", "placeholder"),
     Output("assign-bench", "placeholder"),
     Output("assign-tank", "placeholder"),
@@ -2181,9 +2184,12 @@ def localize_controls(lang_data):
     ]
     return (
         map_opts,
+        "winrate",  # default value
         tr("detailed", lang),
         hero_opts,
+        "winrate",  # default value
         role_opts,
+        "winrate",  # default value
         tr("choose_maps", lang),
         tr("choose_players", lang),
         tr("choose_players", lang),
