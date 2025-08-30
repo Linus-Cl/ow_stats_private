@@ -3,7 +3,7 @@
 # Standard library
 import os
 import re
-from io import StringIO
+from io import StringIO, BytesIO
 import hashlib
 import json
 import subprocess
@@ -16,9 +16,11 @@ import plotly.graph_objects as go
 import requests
 import dash_bootstrap_components as dbc
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash.exceptions import PreventUpdate
 import uuid
 import sqlite3
 import time
+import threading
 from flask import request
 
 # --- Local Imports ---
@@ -88,6 +90,782 @@ def _init_active_db():
         conn.commit()
     finally:
         conn.close()
+
+
+# --- Daily Report ---
+@app.callback(
+    Output("daily-summary", "children"),
+    Output("daily-report-container", "children"),
+    Input("tabs", "active_tab"),
+    Input("lang-store", "data"),
+    Input("daily-date", "date"),
+    prevent_initial_call=False,
+)
+def render_daily_report(active_tab, lang_data, selected_date):
+    lang = (lang_data or {}).get("lang", "en")
+    if active_tab != "tab-daily":
+        return no_update, no_update
+    if df.empty or "Datum" not in df.columns:
+        return html.Div(tr("no_data", lang)), []
+
+    # Filter to target day (today by default, or selected date if provided; else auto-fallback to last active)
+    dff = df.copy()
+    dff["Datum"] = pd.to_datetime(dff["Datum"], errors="coerce")
+    # Allow test override of 'today' via env var FAKE_TODAY=YYYY-MM-DD
+    _fake = os.environ.get("FAKE_TODAY")
+    if _fake:
+        try:
+            today = pd.to_datetime(_fake, errors="raise").normalize()
+        except Exception:
+            today = pd.Timestamp.now().normalize()
+    else:
+        today = pd.Timestamp.now().normalize()
+    # Track whether we auto-fell back to the most recent active day
+    is_fallback = False
+    fallback_notice = None
+    selected_date_dt = None
+    # If a date is selected, prefer it
+    if selected_date:
+        try:
+            selected_date_dt = pd.to_datetime(selected_date).normalize()
+            target_day = selected_date_dt
+        except Exception:
+            target_day = today
+    else:
+        target_day = today
+    dff_day = dff[(dff["Datum"].dt.normalize() == target_day)].copy()
+    if dff_day.empty:
+        # Auto-fallback to the most recent day with matches
+        dff_no_na = dff.dropna(subset=["Datum"]).copy()
+        if not dff_no_na.empty:
+            last_day = dff_no_na["Datum"].dt.normalize().max()
+            target_day = last_day
+            dff_day = dff[(dff["Datum"].dt.normalize() == target_day)].copy()
+            # If user didn't select a date, it's a silent fallback; if they did, show a notice
+            if not selected_date:
+                is_fallback = True
+            else:
+                # Build a concise notice line about the fallback
+                last_day_str = target_day.strftime("%d.%m.%Y") if lang == "de" else target_day.strftime("%Y-%m-%d")
+                fallback_notice = html.Div(
+                    f"{tr('no_games_selected', lang) if tr('no_games_selected', lang) != 'no_games_selected' else 'No games on selected day'} — "
+                    + f"{tr('showing_last_active', lang) if tr('showing_last_active', lang) != 'showing_last_active' else 'Showing last active day'}: {last_day_str}",
+                    style={
+                        "fontSize": "0.9em",
+                        "fontWeight": 600,
+                        "color": "#f3f4f6",
+                        "textShadow": "0 1px 2px rgba(0,0,0,0.6)",
+                        "background": "rgba(0,0,0,0.35)",
+                        "padding": "4px 8px",
+                        "borderRadius": "6px",
+                        "display": "inline-block",
+                        "marginBottom": "6px",
+                    },
+                )
+        else:
+            return html.Div(tr("no_games_today", lang)), []
+
+    # Normalize outcome and bench markers
+    if "Win Lose" not in dff_day.columns:
+        # Required column missing for daily report
+        msg = tr("required_cols_missing", lang).format(cols="Win Lose") if tr("required_cols_missing", lang) != "required_cols_missing" else "Required columns are missing: Win Lose"
+        return html.Div(msg), []
+    wl = dff_day["Win Lose"].astype(str).str.lower().str.strip()
+    dff_day["_win"] = wl.isin(["win", "victory", "sieg"])  # boolean
+    hero_cols = [c for c in dff_day.columns if c.endswith(" Hero")]
+    role_cols = [c for c in dff_day.columns if c.endswith(" Rolle")]
+
+    # Remove bench marker in hero aggregations
+    def _is_valid_hero(x: str) -> bool:
+        s = str(x).strip().lower()
+        return bool(s) and s not in ("nicht dabei", "none", "nan")
+
+    # Helper: robust time extraction (row-wise)
+    time_candidates = ["Uhrzeit", "Zeit", "Time", "Startzeit"]
+
+    def _extract_time_str(row) -> str:
+        dt = row.get("Datum")
+        if pd.notna(dt) and isinstance(dt, pd.Timestamp):
+            if dt.hour or dt.minute or dt.second:
+                return dt.strftime("%H:%M")
+        for name in time_candidates:
+            if name in row.index:
+                v = row[name]
+                if pd.isna(v):
+                    continue
+                # Excel numeric time (fraction of day)
+                if isinstance(v, (int, float)):
+                    try:
+                        frac = float(v)
+                        # keep only fractional part
+                        frac = frac % 1.0
+                        secs = int(round(frac * 86400))
+                        h = secs // 3600
+                        m = (secs % 3600) // 60
+                        if 0 <= h < 24 and 0 <= m < 60:
+                            return f"{h:02d}:{m:02d}"
+                    except Exception:
+                        pass
+                # String forms like 9:30, 0930, 09:30
+                s = str(v).strip()
+                m = re.match(r"^(\d{1,2}):(\d{2})", s)
+                if m:
+                    hh = int(m.group(1))
+                    mm = int(m.group(2))
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+                if re.fullmatch(r"\d{3,4}", s):
+                    s2 = s.zfill(4)
+                    hh = int(s2[:2])
+                    mm = int(s2[2:])
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+        return "--:--"
+
+    def _compose_dt(row) -> pd.Timestamp | None:
+        base = row.get("Datum")
+        if pd.notna(base) and isinstance(base, pd.Timestamp):
+            if base.hour or base.minute or base.second:
+                return base
+        tstr = _extract_time_str(row)
+        if tstr != "--:--" and pd.notna(row.get("Datum")) and isinstance(row.get("Datum"), pd.Timestamp):
+            try:
+                h, m = tstr.split(":")
+                return pd.Timestamp(year=row["Datum"].year, month=row["Datum"].month, day=row["Datum"].day, hour=int(h), minute=int(m))
+            except Exception:
+                return row.get("Datum") if isinstance(row.get("Datum"), pd.Timestamp) else None
+        return row.get("Datum") if isinstance(row.get("Datum"), pd.Timestamp) else None
+
+    # Compose display datetime for ordering and first/last detection
+    dff_day["_dt_show"] = dff_day.apply(_compose_dt, axis=1)
+
+    # Key totals
+    total_games = int(len(dff_day))
+    wins = int(dff_day["_win"].sum())
+    losses = total_games - wins
+    wr = (wins / total_games * 100.0) if total_games else 0.0
+    # Time display removed: skip computing per-match times
+
+    # Top map and top hero of the day
+    top_map = None
+    top_map_wr = None
+    if "Map" in dff_day.columns:
+        top_map = dff_day["Map"].astype(str).value_counts().idxmax()
+        sub_map = dff_day[dff_day["Map"].astype(str) == str(top_map)]
+        if not sub_map.empty:
+            top_map_wr = float(sub_map["_win"].mean() * 100.0)
+
+    top_hero = None
+    top_hero_wr = None
+    top_hero_games = None
+    if hero_cols:
+        all_heroes = []
+        for c in hero_cols:
+            all_heroes.append(dff_day[c].astype(str))
+        heroes_series = pd.concat(all_heroes, ignore_index=True)
+        heroes_series = heroes_series[heroes_series.map(_is_valid_hero)]
+        if not heroes_series.empty:
+            top_hero = heroes_series.value_counts().idxmax()
+            # Any match where any player played that hero counts once
+            mask_any = None
+            top_hero_l = str(top_hero).strip().lower()
+            for c in hero_cols:
+                m = dff_day[c].astype(str).str.strip().str.lower() == top_hero_l
+                mask_any = (mask_any | m) if mask_any is not None else m
+            sub_hero = dff_day[mask_any] if mask_any is not None else dff_day.iloc[0:0]
+            if not sub_hero.empty:
+                top_hero_wr = float(sub_hero["_win"].mean() * 100.0)
+                top_hero_games = int(mask_any.sum())
+
+    # Summary banner with big visual
+    banner_children = []
+    if top_map:
+        banner_children.append(
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            (html.Div(
+                                dbc.Badge(tr("last_active_day", lang), color="warning"),
+                                className="mb-2",
+                            ) if is_fallback else html.Div()),
+                            (fallback_notice if fallback_notice is not None else html.Div()),
+                            html.H3(
+                                tr("today_summary", lang)
+                                if target_day == today
+                                else (target_day.strftime("%d.%m.%Y") if lang == "de" else target_day.strftime("%Y-%m-%d")),
+                                className="mb-1",
+                            ),
+                            html.H1(
+                                f"{wins}-{losses}  •  {wr:.1f}% " + (
+                                    tr('winrate_today', lang) if target_day == today else tr('winrate', lang)
+                                ),
+                                className="mb-2",
+                            ),
+                            html.Div(
+                                f"{(tr('games_today', lang) if target_day == today else tr('games', lang))}: {total_games}",
+                                className="",
+                                style={
+                                    "fontSize": "1.05em",
+                                    "fontWeight": 700,
+                                    "color": "#f3f4f6",
+                                    "textShadow": "0 1px 2px rgba(0,0,0,0.6)",
+                                    "background": "rgba(0,0,0,0.35)",
+                                    "padding": "4px 8px",
+                                    "borderRadius": "6px",
+                                    "display": "inline-block",
+                                },
+                            ),
+                        ],
+                        style={
+                            "position": "relative",
+                            "zIndex": 2,
+                            # Improve readability on bright images (light mode)
+                            "color": "#f9fafb",
+                            "textShadow": "0 1px 2px rgba(0,0,0,0.6)",
+                        },
+                    ),
+                ],
+                style={
+                    "position": "relative",
+                    "padding": "24px",
+                    "borderRadius": "10px",
+                    "overflow": "hidden",
+                    "backgroundImage": f"url('{get_map_image_url(top_map)}')",
+                    "backgroundSize": "cover",
+                    "backgroundPosition": "center",
+                    "minHeight": "220px",
+                    "display": "flex",
+                    "alignItems": "flex-end",
+                    "boxShadow": "0 8px 24px rgba(0,0,0,0.35)",
+                },
+            )
+        )
+        # dark overlay
+        banner_children[-1].children.append(
+            html.Div(
+                style={
+                    "position": "absolute",
+                    "inset": 0,
+                    "background": "linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.55) 100%)",
+                    "zIndex": 1,
+                }
+            )
+        )
+        # map of the day pill (bottom-right)
+        banner_children[-1].children.append(
+            html.Div(
+                [
+                    html.Span(
+                        f"{tr('map_of_the_day', lang)}: {top_map}",
+                        style={"fontWeight": 700},
+                    ),
+                    html.Span(
+                        f"  •  {tr('winrate', lang)}: {top_map_wr:.1f}%" if top_map_wr is not None else "",
+                        className="text-muted",
+                        style={"marginLeft": "6px"},
+                    ),
+                ],
+                style={
+                    "position": "absolute",
+                    "right": "12px",
+                    "bottom": "12px",
+                    "zIndex": 3,
+                    "background": "rgba(0,0,0,0.55)",
+                    "backdropFilter": "blur(4px)",
+                    "color": "#e5e7eb",
+                    "padding": "6px 10px",
+                    "borderRadius": "8px",
+                    "boxShadow": "0 4px 12px rgba(0,0,0,0.35)",
+                    "fontSize": "0.95em",
+                },
+            )
+        )
+    else:
+    # Fallback banner with date picker on top-right
+        banner_children.append(
+            html.Div(
+                [
+                    dbc.Alert(
+                        [
+                            html.H4(
+                                tr("daily_report", lang),
+                                className="mb-1",
+                                style={"color": "#0b1320", "textShadow": "none"},
+                            ),
+                            html.Div(
+                                f"{tr('games_today', lang)}: {total_games} • {tr('wins', lang)}: {wins} • {tr('losses', lang)}: {losses} • {tr('winrate_today', lang)}: {wr:.1f}%",
+                                style={"color": "#0b1320"},
+                            ),
+                            (fallback_notice if fallback_notice is not None else html.Div()),
+                        ],
+                        color="primary",
+                        className="mb-0",
+                        style={"paddingRight": "140px"},  # space for picker
+                    ),
+                ],
+                style={"position": "relative"},
+            )
+        )
+
+    # Spotlight cards: Map of the day, Hero spotlight, MVP, Workhorse
+    spotlight_cards = []
+    # Map of the day card removed (now displayed in banner)
+    if top_hero is not None:
+        spotlight_cards.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+            dbc.CardHeader(tr("most_played_hero", lang)),
+                        dbc.CardBody(
+                            html.Div(
+                                [
+                                    html.Img(
+                                        src=get_hero_image_url(top_hero),
+                                        style={
+                                            "width": "64px",
+                                            "height": "64px",
+                                            "objectFit": "cover",
+                                            "borderRadius": "50%",
+                                            "marginRight": "12px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.H5(str(top_hero), className="mb-1"),
+                                            html.Small(
+                                                " • ".join(
+                                                    [
+                                                        part
+                                                        for part in [
+                                                            (f"{tr('winrate', lang)}: {top_hero_wr:.1f}%" if top_hero_wr is not None else None),
+                                                            (f"{tr('games', lang)}: {top_hero_games}" if top_hero_games is not None else None),
+                                                        ]
+                                                        if part
+                                                    ]
+                                                ),
+                                                className="text-muted",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="d-flex align-items-center",
+                            )
+                        ),
+                    ]
+                , className="flex-fill h-100"),
+                md=3,
+                className="d-flex",
+            )
+        )
+
+    # Per-player today stats for MVP/Workhorse and lineup
+    player_rows = []
+    for p in constants.players:
+        # player participated today if their own role column exists and is not 'nicht dabei'
+        role_col_name = f"{p} Rolle"
+        if role_col_name not in dff_day.columns:
+            continue
+        mask_p = dff_day[role_col_name].astype(str).str.strip().str.lower() != "nicht dabei"
+        mask_p = mask_p & dff_day[role_col_name].notna()
+        if not mask_p.any():
+            continue
+        sub = dff_day[mask_p]
+        games_p = int(len(sub))
+        wins_p = int(sub["_win"].sum())
+        losses_p = games_p - wins_p
+        wr_p = float(sub["_win"].mean() * 100.0) if games_p else 0.0
+        # roles played
+        roles_p = sub[role_col_name].dropna().astype(str).str.strip().tolist()
+        roles_p = sorted({r for r in roles_p if r and r.lower() != "nicht dabei"})
+        # top hero for this player
+        hero_col_name = f"{p} Hero"
+        top_hero_p = None
+        if hero_col_name in sub.columns:
+            h = sub[hero_col_name].dropna().astype(str)
+            h = h[h.map(_is_valid_hero)]
+            if not h.empty:
+                top_hero_p = h.value_counts().idxmax()
+        player_rows.append({
+            "player": p,
+            "games": games_p,
+            "wins": wins_p,
+            "losses": losses_p,
+            "wr": wr_p,
+            "roles": roles_p,
+            "top_hero": top_hero_p,
+        })
+
+    # Biggest Flex, One Trick Pony, and Hero-Carry
+    if player_rows:
+        dfp = pd.DataFrame(player_rows)
+        # Compute per-player hero usage counts within the day
+        hero_usage = []
+        for p in constants.players:
+            role_col = f"{p} Rolle"
+            hero_col = f"{p} Hero"
+            if role_col in dff_day.columns and hero_col in dff_day.columns:
+                subp = dff_day[(dff_day[role_col].astype(str).str.strip().str.lower() != "nicht dabei") & dff_day[hero_col].notna()]
+                heroes = subp[hero_col].astype(str).str.strip()
+                heroes = heroes[heroes.map(_is_valid_hero)]
+                if not heroes.empty:
+                    counts = heroes.value_counts()
+                    hero_usage.append({
+                        "player": p,
+                        "distinct": int(counts.shape[0]),
+                        "top_hero": counts.idxmax(),
+                        "top_hero_games": int(counts.max()),
+                        "total_games": int(counts.sum()),
+                    })
+        dfu = pd.DataFrame(hero_usage) if hero_usage else pd.DataFrame(columns=["player","distinct","top_hero","top_hero_games","total_games"]) 
+
+        # Biggest Flex: most distinct heroes
+        if not dfu.empty:
+            flex_row = dfu.sort_values(["distinct","total_games"], ascending=[False, False]).iloc[0]
+            # Compute up to 3 most-played heroes for the flex player to show as a compact image stack
+            _flex_player = flex_row["player"]
+            _role_col = f"{_flex_player} Rolle"
+            _hero_col = f"{_flex_player} Hero"
+            top3_heroes = []
+            if _role_col in dff_day.columns and _hero_col in dff_day.columns:
+                _subp = dff_day[(dff_day[_role_col].astype(str).str.strip().str.lower() != "nicht dabei") & dff_day[_hero_col].notna()]
+                if not _subp.empty:
+                    vc = (
+                        _subp[_hero_col]
+                        .astype(str)
+                        .str.strip()
+                        .pipe(lambda s: s[s.map(_is_valid_hero)])
+                        .value_counts()
+                    )
+                    top3_heroes = list(vc.index[:3])
+            # Build overlapping image avatars (fallback to default if none)
+            avatar_imgs = []
+            if top3_heroes:
+                for i, h in enumerate(top3_heroes):
+                    avatar_imgs.append(
+                        html.Img(
+                            src=get_hero_image_url(h),
+                            title=str(h),
+                            style={
+                                "width": "42px",
+                                "height": "42px",
+                                "borderRadius": "50%",
+                                "objectFit": "cover",
+                                "border": "2px solid rgba(255,255,255,0.85)",
+                                "boxShadow": "0 1px 4px rgba(0,0,0,0.35)",
+                                "marginLeft": ("-10px" if i > 0 else "0"),
+                            },
+                        )
+                    )
+            else:
+                avatar_imgs.append(
+                    html.Img(
+                        src="/assets/heroes/default_hero.png",
+                        style={
+                            "width": "42px",
+                            "height": "42px",
+                            "borderRadius": "50%",
+                            "objectFit": "cover",
+                            "border": "2px solid rgba(255,255,255,0.85)",
+                            "boxShadow": "0 1px 4px rgba(0,0,0,0.35)",
+                        },
+                    )
+                )
+            spotlight_cards.append(
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader(tr("biggest_flex", lang) if tr("biggest_flex", lang) != "biggest_flex" else "Biggest Flex"),
+                            dbc.CardBody(
+                                html.Div(
+                                    [
+                                        html.Div(avatar_imgs, className="d-flex align-items-center me-3"),
+                                        html.Div(
+                                            [
+                                                html.H5(str(flex_row["player"]), className="mb-1"),
+                                                html.Small(
+                                                    f"{tr('games', lang)}: {int(flex_row['total_games'])} • {tr('distinct_heroes', lang)}: {int(flex_row['distinct'])}",
+                                                    className="text-muted",
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center",
+                                )
+                            ),
+                        ]
+                    , className="flex-fill h-100"),
+                    md=3,
+                    className="d-flex",
+                )
+            )
+
+        # One Trick Pony: max games on a single hero
+        if not dfu.empty:
+            otp_row = dfu.sort_values(["top_hero_games","total_games"], ascending=[False, False]).iloc[0]
+            otp_title = tr("one_trick_pony", lang) if tr("one_trick_pony", lang) != "one_trick_pony" else "One Trick Pony"
+            spotlight_cards.append(
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader(otp_title),
+                            dbc.CardBody(
+                                html.Div(
+                                    [
+                                        html.Img(
+                                            src=get_hero_image_url(otp_row["top_hero"]),
+                                            style={
+                                                "width": "64px",
+                                                "height": "64px",
+                                                "objectFit": "cover",
+                                                "borderRadius": "50%",
+                                                "marginRight": "12px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.H5(f"{otp_row['player']} – {otp_row['top_hero']}", className="mb-1"),
+                                                html.Small(
+                                                    f"{tr('games', lang)}: {int(otp_row['top_hero_games'])}",
+                                                    className="text-muted",
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center",
+                                )
+                            ),
+                        ]
+                    , className="flex-fill h-100"),
+                    md=3,
+                    className="d-flex",
+                )
+            )
+
+        # Hero-Carry: player-hero combo with highest winrate (min 2 games; fallback 1)
+        best_combo = None
+        best_wr = -1.0
+        best_games = 0
+        best_player = None
+        best_hero = None
+        for p in constants.players:
+            role_col = f"{p} Rolle"
+            hero_col = f"{p} Hero"
+            if role_col not in dff_day.columns or hero_col not in dff_day.columns:
+                continue
+            subp = dff_day[(dff_day[role_col].astype(str).str.strip().str.lower() != "nicht dabei") & dff_day[hero_col].notna()]
+            if subp.empty:
+                continue
+            g = subp.groupby(subp[hero_col].astype(str).str.strip())
+            for hero, grp in g:
+                if not _is_valid_hero(hero):
+                    continue
+                games_n = int(len(grp))
+                wr_val = float((grp["_win"].mean() * 100.0) if games_n else 0.0)
+                # prefer >=2 games; fallback if nothing qualifies
+                prefer = (games_n >= 2)
+                if best_combo is None:
+                    best_combo = prefer
+                    best_wr, best_games, best_player, best_hero = wr_val, games_n, p, hero
+                else:
+                    if prefer and not best_combo:
+                        best_combo = True
+                        best_wr, best_games, best_player, best_hero = wr_val, games_n, p, hero
+                    elif prefer == best_combo:
+                        if (wr_val > best_wr) or (wr_val == best_wr and games_n > best_games):
+                            best_wr, best_games, best_player, best_hero = wr_val, games_n, p, hero
+        if best_player is not None and best_hero is not None:
+            # Dynamic title with hero name, e.g., "Tracer-Carry"
+            carry_title = f"{best_hero}-Carry"
+            spotlight_cards.append(
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader(carry_title),
+                            dbc.CardBody(
+                                html.Div(
+                                    [
+                                        html.Img(
+                                            src=get_hero_image_url(best_hero),
+                                            style={
+                                                "width": "64px",
+                                                "height": "64px",
+                                                "objectFit": "cover",
+                                                "borderRadius": "50%",
+                                                "marginRight": "12px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.H5(f"{best_player} – {best_hero}", className="mb-1"),
+                                                html.Small(
+                                                    f"{tr('games', lang)}: {best_games} • {tr('winrate', lang)}: {best_wr:.1f}%",
+                                                    className="text-muted",
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center",
+                                )
+                            ),
+                        ]
+                    , className="flex-fill h-100"),
+                    md=3,
+                    className="d-flex",
+                )
+            )
+
+    # Player lineup grid
+    lineup_cards = []
+    role_color = {"Tank": "warning", "Damage": "danger", "Support": "success"}
+    for r in player_rows:
+        badges = [
+            dbc.Badge(role, color=role_color.get(role, "secondary"), className="me-1")
+            for role in r["roles"]
+        ]
+        lineup_cards.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardBody(
+                            html.Div(
+                                [
+                                    html.Img(
+                                        src=get_hero_image_url(r.get("top_hero")) if r.get("top_hero") else "/assets/heroes/default_hero.png",
+                                        style={
+                                            "width": "54px",
+                                            "height": "54px",
+                                            "borderRadius": "50%",
+                                            "objectFit": "cover",
+                                            "marginRight": "12px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(html.Strong(r["player"])),
+                                            html.Div(badges, className="mb-1"),
+                                            html.Small(
+                                                f"{tr('games', lang)}: {r['games']} • {int(r['wins'])}-{int(r['losses'])} • {tr('winrate', lang)} {r['wr']:.1f}%",
+                                                className="text-muted",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="d-flex align-items-center",
+                            )
+                        )
+                    ]
+                ),
+                md=4,
+            )
+        )
+
+    # Timeline as horizontal strip with small map tiles and arrows
+    timeline_list_items = []
+    # Build robust sort key: prefer extracted datetime, fallback to Datum, then Match ID; newest first
+    dff_day["_dt_sort"] = dff_day["_dt_show"]
+    if "Datum" in dff_day.columns:
+        _mask_na = dff_day["_dt_sort"].isna()
+        dff_day.loc[_mask_na, "_dt_sort"] = dff_day.loc[_mask_na, "Datum"]
+    dff_day["_dt_has"] = dff_day["_dt_sort"].notna().astype(int)
+    _sort_cols = ["_dt_has", "_dt_sort"]
+    _asc = [False, False]
+    if "Match ID" in dff_day.columns:
+        _sort_cols.append("Match ID")
+        _asc.append(False)
+    dff_today_sorted = dff_day.sort_values(_sort_cols, ascending=_asc)
+    tiles = []
+    records = dff_today_sorted.to_dict(orient="records")
+    for idx, game in enumerate(records):
+        map_name = str(game.get("Map", tr("unknown_map", lang)))
+        _mid = game.get("Match ID")
+        victory = bool(game.get("_win"))
+        img_src = get_map_image_url(map_name)
+        border_col = "#16a34a" if victory else "#dc2626"
+        tile = html.Div(
+            [
+                html.Div(
+                    html.Img(
+                        src=img_src,
+                        style={
+                            "width": "100%",
+                            "height": "100%",
+                            "objectFit": "cover",
+                            "display": "block",
+                        },
+                        title=f"{map_name} • " + (tr("victory", lang) if victory else tr("defeat", lang)),
+                    ),
+                    style={
+                        "width": "84px",
+                        "height": "56px",
+                        "border": f"2px solid {border_col}",
+                        "borderRadius": "8px",
+                        "overflow": "hidden",
+                        "boxShadow": "0 1px 6px rgba(0,0,0,0.3)",
+                        "position": "relative",
+                    },
+                ),
+                html.Div(
+                    map_name,
+                    className="text-muted",
+                    style={
+                        "fontSize": "0.75rem",
+                        "textAlign": "center",
+                        "marginTop": "4px",
+                        "maxWidth": "84px",
+                        "whiteSpace": "nowrap",
+                        "overflow": "hidden",
+                        "textOverflow": "ellipsis",
+                    },
+                ),
+            ],
+            id={"type": "timeline-tile", "matchId": int(_mid) if (pd.notna(_mid)) else -1},
+            n_clicks=0,
+            style={"flex": "0 0 auto", "cursor": "pointer"},
+        )
+        tiles.append(tile)
+        # Connector line between tiles, skip after last element
+        if idx < len(records) - 1:
+            tiles.append(
+                html.Div(
+                    # small arrowhead pointing left (triangle only)
+                    style={
+                        "width": 0,
+                        "height": 0,
+                        "borderTop": "6px solid transparent",
+                        "borderBottom": "6px solid transparent",
+                        "borderRight": "8px solid rgba(156,163,175,0.7)",
+                        "marginTop": "25px",  # vertically center near tile middle
+                        "flex": "0 0 auto",
+                    },
+                    title="",
+                )
+            )
+    timeline_component = html.Div(
+        tiles,
+        style={
+            "display": "flex",
+            "alignItems": "flex-start",
+            "gap": "8px",
+            "flexWrap": "wrap",
+            "padding": "6px 2px",
+        },
+    )
+
+    # Assemble content
+    summary = banner_children[0]
+    content = [
+        dbc.Row(spotlight_cards, className="mt-3 g-3") if spotlight_cards else html.Div(),
+        html.H4(tr("lineup_today", lang), className="mt-4 mb-2"),
+        dbc.Row(lineup_cards, className="g-3") if lineup_cards else dbc.Alert(tr("no_data", lang), color="secondary"),
+    html.Div([
+        html.H4(tr("timeline_today", lang), className="mb-2 me-2"),
+        html.Small(tr("newest_first", lang), className="text-muted")
+    ], className="d-flex align-items-baseline mt-4"),
+    timeline_component,
+    ]
+
+    return summary, content
 
 
 def _upsert_heartbeat(session_id: str):
@@ -327,6 +1105,34 @@ def tr(key: str, lang: str) -> str:
         "side": {"en": "Side", "de": "Seite"},
         "game_number": {"en": "Game number", "de": "Spielnummer"},
         "online_now": {"en": "Online", "de": "Online"},
+    "daily_report": {"en": "Daily Report", "de": "Tagesreport"},
+    "today_summary": {"en": "Today", "de": "Heute"},
+    "no_games_today": {"en": "No games today", "de": "Heute keine Spiele"},
+        "view_last_active_day_q": {
+            "en": "Do you want to view the last active day ({date}, {n} games)?",
+            "de": "Möchtest du den letzten aktiven Tag ansehen ({date}, {n} Spiele)?",
+        },
+        "view_last_active_day_btn": {"en": "Show", "de": "Anzeigen"},
+    "wins": {"en": "Wins", "de": "Siege"},
+    "losses": {"en": "Losses", "de": "Niederlagen"},
+    "winrate_today": {"en": "Winrate today", "de": "Winrate heute"},
+    "games_today": {"en": "Games today", "de": "Spiele heute"},
+    "map_of_the_day": {"en": "Map of the day", "de": "Map des Tages"},
+    "hero_spotlight": {"en": "Hero spotlight", "de": "Held im Fokus"},
+    "biggest_flex": {"en": "Biggest Flex", "de": "Größter Flex"},
+    "one_trick_pony": {"en": "One Trick Pony", "de": "One Trick Pony"},
+    "hero_carry": {"en": "Hero Carry", "de": "Hero Carry"},
+    "lineup_today": {"en": "Lineup", "de": "Aufstellung"},
+    "timeline_today": {"en": "Timeline", "de": "Zeitverlauf"},
+    "first_match": {"en": "First match", "de": "Erstes Spiel"},
+    "last_match": {"en": "Last match", "de": "Letztes Spiel"},
+    "newest_first": {"en": "Newest first", "de": "Neueste zuerst"},
+    "last_active_day": {"en": "Last active day", "de": "Letzter aktiver Tag"},
+    "distinct_heroes": {"en": "Distinct heroes", "de": "Verschiedene Helden"},
+    "select_day": {"en": "Select day:", "de": "Tag wählen:"},
+    "no_games_selected": {"en": "No games on selected day", "de": "Keine Spiele am gewählten Tag"},
+    "showing_last_active": {"en": "Showing last active day", "de": "Zeige letzten aktiven Tag"},
+    "date_placeholder": {"en": "Date", "de": "Datum"},
     }
     v = T.get(key, {})
     return v.get(lang, v.get("en", key))
@@ -359,13 +1165,49 @@ def load_data(use_local=True):
                 df = pd.DataFrame()
 
     if not df.empty:
-        # VALIDATE REQUIRED COLUMNS
+        # Normalize all column names to strings and strip whitespace first
+        df.columns = df.columns.map(lambda c: str(c).strip())
+
+        # Build a robust rename map for common synonyms and localized headers
+        def _norm_key(s: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", s.lower())
+
+        base_map = {
+            "winlose": "Win Lose",
+            "ergebnis": "Win Lose",
+            "map": "Map",
+            "karte": "Map",
+            "matchid": "Match ID",
+            "match": "Match ID",
+            "datum": "Datum",
+            "date": "Datum",
+        }
+        ren = {}
+        for col in list(df.columns):
+            key = _norm_key(col)
+            if key in base_map:
+                ren[col] = base_map[key]
+                continue
+            # Per-player Role/Hero columns (handle English/German variants)
+            for p in getattr(constants, "players", []):
+                if not isinstance(p, str):
+                    continue
+                # Role
+                if key == _norm_key(f"{p} rolle") or key == _norm_key(f"{p} role"):
+                    ren[col] = f"{p} Rolle"
+                    break
+                # Hero
+                if key == _norm_key(f"{p} hero") or key == _norm_key(f"{p} held"):
+                    ren[col] = f"{p} Hero"
+                    break
+        if ren:
+            df.rename(columns=ren, inplace=True)
+
+        # VALIDATE REQUIRED COLUMNS (after normalization)
         required = ["Win Lose", "Map", "Match ID"]
         missing = [c for c in required if c not in df.columns]
         if missing:
             print(f"Warnung: Fehlende Pflichtspalten: {missing}")
-
-        df.columns = df.columns.str.strip()
         if "Attack Def" in df.columns:
             df["Attack Def"] = df["Attack Def"].str.strip()
         if "Datum" in df.columns:
@@ -387,7 +1229,7 @@ def load_data(use_local=True):
             "Support": "Support",
         }
         for col in df.columns:
-            if col.endswith(" Rolle"):
+            if str(col).endswith(" Rolle"):
                 df[col] = df[col].astype(str).str.strip()
                 df[col] = df[col].replace(role_map)
 
@@ -406,37 +1248,84 @@ def _fetch_update_from_cloud(force: bool = False) -> bool:
             headers["If-None-Match"] = _last_etag
         if _last_modified:
             headers["If-Modified-Since"] = _last_modified
-    try:
-        resp = requests.get(constants.url, headers=headers, timeout=20)
-    except Exception as e:
-        print(f"Cloud fetch failed: {e}")
-        return False
+    # Prefer OneDrive Excel if configured; otherwise use Google Drive CSV
+    use_onedrive = bool(getattr(constants, "ONEDRIVE_SHARE_URL", "").strip())
+    if use_onedrive:
+        share_url = constants.ONEDRIVE_SHARE_URL.strip()
+        # Force direct download and add a cache-busting query so CDN doesn't serve stale content
+        base = share_url + ("&" if ("?" in share_url) else "?") + constants.ONEDRIVE_FORCE_DOWNLOAD_PARAM
+        cb = str(int(time.time()))
+        dl_url = base + ("&" if ("?" in base) else "?") + "cb=" + cb
+        try:
+            # First, hit the view URL (no download) to nudge OneDrive to surface the latest version
+            view_headers = {"Cache-Control": "no-cache", "Pragma": "no-cache", "Accept": "text/html,application/xhtml+xml"}
+            try:
+                requests.get(share_url, headers=view_headers, timeout=15)
+            except Exception:
+                pass
+            # Then request the download, avoiding conditional headers (ETag/Last-Modified)
+            req_headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+            resp = requests.get(dl_url, headers=req_headers, timeout=30)
+        except Exception as e:
+            print(f"OneDrive fetch failed: {e}")
+            return False
 
-    if resp.status_code == 304:
-        # Not modified
-        return False
-    if resp.status_code != 200:
-        print(f"Cloud fetch HTTP {resp.status_code}")
-        return False
+        if resp.status_code == 304:
+            return False
+        if resp.status_code != 200:
+            print(f"OneDrive fetch HTTP {resp.status_code}")
+            return False
 
-    text = resp.text or ""
-    new_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
-    if not force and _last_hash and new_hash == _last_hash:
-        return False
+        content_bytes = resp.content or b""
+        new_hash = hashlib.sha256(content_bytes).hexdigest()
+        if not force and _last_hash and new_hash == _last_hash:
+            return False
 
-    try:
-        tmp_df = pd.read_csv(StringIO(text))
-        tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
-        # Reload and normalize via existing loader
-        load_data(use_local=True)
-    except Exception as e:
-        print(f"Download ok, but parse/save failed: {e}")
-        return False
+        try:
+            # Read Excel from bytes and save a normalized copy
+            tmp_df = pd.read_excel(BytesIO(content_bytes), engine="openpyxl")
+            tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
+            load_data(use_local=True)
+        except Exception as e:
+            print(f"OneDrive download ok, but parse/save failed: {e}")
+            return False
 
-    _last_etag = resp.headers.get("ETag", _last_etag)
-    _last_modified = resp.headers.get("Last-Modified", _last_modified)
-    _last_hash = new_hash
-    return True
+        _last_etag = resp.headers.get("ETag", _last_etag)
+        _last_modified = resp.headers.get("Last-Modified", _last_modified)
+        _last_hash = new_hash
+        return True
+    else:
+        try:
+            resp = requests.get(constants.url, headers=headers, timeout=20)
+        except Exception as e:
+            print(f"Cloud fetch failed: {e}")
+            return False
+
+        if resp.status_code == 304:
+            # Not modified
+            return False
+        if resp.status_code != 200:
+            print(f"Cloud fetch HTTP {resp.status_code}")
+            return False
+
+        text = resp.text or ""
+        new_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+        if not force and _last_hash and new_hash == _last_hash:
+            return False
+
+        try:
+            tmp_df = pd.read_csv(StringIO(text))
+            tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
+            # Reload and normalize via existing loader
+            load_data(use_local=True)
+        except Exception as e:
+            print(f"Download ok, but parse/save failed: {e}")
+            return False
+
+        _last_etag = resp.headers.get("ETag", _last_etag)
+        _last_modified = resp.headers.get("Last-Modified", _last_modified)
+        _last_hash = new_hash
+        return True
 
 
 # One-time lazy cloud check at startup (conditional; no UI impact)
@@ -450,6 +1339,33 @@ try:
                     _set_app_state("data_token", _last_hash)
             except Exception:
                 pass
+except Exception:
+    pass
+
+
+# --- Background updater (server-side) ---
+def _background_updater():
+    try:
+        interval_s = max(5, int(float(os.environ.get("AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES)) * 60))
+    except Exception:
+        interval_s = 300
+    while True:
+        try:
+            updated = _fetch_update_from_cloud(force=False)
+            if updated and _last_hash:
+                try:
+                    _set_app_state("data_token", _last_hash)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        time.sleep(interval_s)
+
+
+try:
+    if os.environ.get("ENABLE_BG_UPDATER", "1") in ("1", "true", "TRUE"):
+        t = threading.Thread(target=_background_updater, daemon=True)
+        t.start()
 except Exception:
     pass
 
@@ -546,6 +1462,7 @@ def refresh_data_route():
 # --- Layout ---
 app.layout = html.Div(
     [
+    dcc.Location(id="url"),
         dcc.Store(id="history-display-count-store", data={"count": 10}),
         dcc.Store(id="role-history-count-store", data={"count": 10}),
         # Persist the chosen theme locally (light/dark)
@@ -558,6 +1475,8 @@ app.layout = html.Div(
         dcc.Store(id="server-update-token", storage_type="memory"),
         # Hidden target for clientside side-effects
         html.Div(id="theme-body-sync", style={"display": "none"}),
+    # Hidden ack for scroll-into-view clientside callback
+    html.Div(id="dummy-scroll-ack", style={"display": "none"}),
         # Hidden heartbeat output for server-side tracking
         html.Div(id="heartbeat-dummy", style={"display": "none"}),
         # Hidden periodic auto-update (no UI elements added)
@@ -565,10 +1484,14 @@ app.layout = html.Div(
             id="auto-update-tick",
             interval=(
                 int(
-                    os.environ.get("AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES)
+                    float(
+                        os.environ.get(
+                            "AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES
+                        )
+                    )
+                    * 60
+                    * 1000
                 )
-                * 60
-                * 1000
             ),
         ),
         # Poll the server update token so all sessions pick up data changes
@@ -1010,6 +1933,41 @@ app.layout = html.Div(
                                             ],
                                         ),
                                         dbc.Tab(
+                                            id="tab-comp-daily",
+                                            label="Daily Report",
+                                            tab_id="tab-daily",
+                                            children=[
+                                                # Static, overlaid date picker positioned relative within the summary wrapper
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            dcc.DatePickerSingle(
+                                                                id="daily-date",
+                                                                display_format="YYYY-MM-DD",
+                                                                max_date_allowed=pd.Timestamp.now().normalize().date(),
+                                                                initial_visible_month=pd.Timestamp.now().normalize().date(),
+                                                                clearable=True,
+                                                                placeholder="Date",
+                                                                className="daily-date-picker",
+                                                            ),
+                                                            style={
+                                                                "position": "absolute",
+                                                                "top": "10px",
+                                                                "right": "10px",
+                                                                "zIndex": 4,
+                                                                "padding": "2px",
+                                                                "borderRadius": "999px",
+                                                                "background": "radial-gradient(closest-side, rgba(255,255,255,0.5), rgba(255,255,255,0) 70%)",
+                                                            },
+                                                        ),
+                                                        html.Div(id="daily-summary", className="mb-3"),
+                                                    ],
+                                                    style={"position": "relative"},
+                                                ),
+                                                html.Div(id="daily-report-container"),
+                                            ],
+                                        ),
+                                        dbc.Tab(
                                             id="tab-comp-hero",
                                             label="Held Statistik",
                                             tab_id="tab-hero",
@@ -1226,6 +2184,32 @@ app.layout = html.Div(
     className="",
 )
 
+
+# Smooth scroll to hash target after content renders (retries briefly)
+app.clientside_callback(
+        """
+        function(hash) {
+                if (!hash || typeof hash !== 'string' || hash.length < 2) { return window.dash_clientside.no_update; }
+                const targetId = hash.substring(1);
+                let attempts = 0;
+                function tryScroll(){
+                    const el = document.getElementById(targetId);
+                    if (el){
+                         el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                         return;
+                    }
+                    attempts += 1;
+                    if (attempts < 20){ // retry up to ~1s
+                         setTimeout(tryScroll, 50);
+                    }
+                }
+                setTimeout(tryScroll, 0);
+                return "ok";
+        }
+        """,
+        Output("dummy-scroll-ack", "children"),
+        Input("url", "hash")
+)
 
 # --- Patchnotes (from git log) ---
 def _is_relevant_file(path: str) -> bool:
@@ -1573,6 +2557,14 @@ def _beautify_subject(subj: str, lang: str) -> str:
             {"de": "Angriff/Verteidigung-Statistik", "en": "Attack/Defense stats"},
         ),
         ("added heatmap", {"de": "Heatmap verbessert", "en": "Heatmap improved"}),
+        # Daily Report feature umbrella
+        (
+            "daily report",
+            {
+                "de": "Tagesreport",
+                "en": "Daily Report",
+            },
+        ),
     ]
     for key, loc in mapping:
         if key in s:
@@ -1898,6 +2890,10 @@ def _describe_change(subj: str, files: list[str] | None, lang: str) -> str:
                 "en": "Introduced or improved the heatmap.",
             },
         ),
+        (
+            "daily report",
+            {"de": "Tagesreport", "en": "Daily Report"},
+        ),
     ]
     for key, loc in mapping:
         if key in s:
@@ -2050,6 +3046,7 @@ def set_language(n_en, n_de, data):
     Output("label-month", "children"),
     Output("label-min-games", "children"),
     Output("tab-comp-map", "label"),
+    Output("tab-comp-daily", "label"),
     Output("tab-comp-role-assign", "label"),
     Output("tab-comp-hero", "label"),
     Output("tab-comp-role", "label"),
@@ -2073,6 +3070,7 @@ def apply_language_texts(lang_data):
             "Monat auswählen:",
             "Mindestanzahl Spiele:",
             "Map & Mode Statistik",
+            "Tagesreport",
             "Rollen-Zuordnung",
             "Held Statistik",
             "Rollen Statistik",
@@ -2093,6 +3091,7 @@ def apply_language_texts(lang_data):
         "Select month:",
         "Minimum games:",
         "Map & Mode Stats",
+        "Daily Report",
         "Role Assignment",
         "Hero Stats",
         "Role Stats",
@@ -2237,6 +3236,30 @@ def localize_patchnotes_link(lang_data):
     text = "Patchnotes" if lang == "de" else "Patch notes"
     href = f"/patchnotes?lang={lang}"
     return text, href
+
+
+# Localize the daily date selector format only (no label in UI)
+@app.callback(
+    Output("daily-date", "display_format"),
+    Output("daily-date", "placeholder"),
+    Input("lang-store", "data"),
+)
+def localize_daily_date(lang_data):
+    lang = (lang_data or {}).get("lang", "en")
+    fmt = "DD.MM.YYYY" if lang == "de" else "YYYY-MM-DD"
+    ph = tr("date_placeholder", lang) if tr("date_placeholder", lang) != "date_placeholder" else ("Datum" if lang == "de" else "Date")
+    return fmt, ph
+
+
+# Keep date picker within bounds and in a sane month view
+@app.callback(
+    Output("daily-date", "max_date_allowed"),
+    Output("daily-date", "initial_visible_month"),
+    Input("lang-store", "data"),
+)
+def _sync_datepicker_bounds(_lang_data):
+    today = pd.Timestamp.now().normalize().date()
+    return today, today
 
 
 # --- Helper Functions ---
@@ -2480,6 +3503,12 @@ def generate_history_layout_simple(games_df):
                     )
                 )
 
+        anchor_id = None
+        try:
+            if pd.notna(game.get("Match ID")):
+                anchor_id = f"match-{int(game.get('Match ID'))}"
+        except Exception:
+            anchor_id = None
         card = dbc.Card(
             dbc.Row(
                 [
@@ -2528,6 +3557,7 @@ def generate_history_layout_simple(games_df):
                 className="g-0",
             ),
             className="mb-3",
+            id=anchor_id,
         )
         history_items.append(card)
 
@@ -2666,6 +3696,24 @@ def update_data(n_clicks, n_intervals):
         return no_update
     return no_update
 
+
+
+@app.callback(
+    Output("year-dropdown", "value", allow_duplicate=True),
+    Output("month-dropdown", "value", allow_duplicate=True),
+    Input("btn-view-last-active-day", "n_clicks"),
+    prevent_initial_call=True,
+)
+def on_view_last_active_day(n):
+    if not n:
+        raise PreventUpdate
+    if df.empty or "Datum" not in df.columns:
+        raise PreventUpdate
+    dff = df.dropna(subset=["Datum"]).copy()
+    if dff.empty:
+        raise PreventUpdate
+    last = dff["Datum"].max()
+    return int(last.year), int(last.month)
 
 @app.callback(
     Output("server-update-token", "data"),
@@ -2864,6 +3912,7 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
     Output("history-list-container", "children"),
     Output("history-display-count-store", "data"),
     Input("load-more-history-button", "n_clicks"),
+    Input("history-display-count-store", "data"),
     Input("player-dropdown-match-verlauf", "value"),
     Input("hero-filter-dropdown-match", "value"),
     Input("dummy-output", "children"),
@@ -2871,7 +3920,7 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
     State("history-load-amount-dropdown", "value"),
 )
 def update_history_display(
-    n_clicks, player_name, hero_name, _, current_store, load_amount
+    n_clicks, store_data_in, player_name, hero_name, _, current_store, load_amount
 ):
     global df
     if df.empty:
@@ -2888,6 +3937,9 @@ def update_history_display(
         "dummy-output",
     ]:
         new_count = 10
+    elif triggered_id == "history-display-count-store":
+        # External update of count (e.g., from timeline click)
+        new_count = int((store_data_in or {}).get("count", current_store.get("count", 10)))
     else:  # triggered by "load-more-history-button"
         new_count = current_store.get("count", 10) + load_amount
 
@@ -2929,6 +3981,48 @@ def update_history_display(
         ]
 
     return history_layout, {"count": new_count}
+
+
+# Jump from Daily timeline tile to the corresponding Match History card
+@app.callback(
+    Output("tabs", "active_tab", allow_duplicate=True),
+    Output("history-display-count-store", "data", allow_duplicate=True),
+    Output("url", "hash", allow_duplicate=True),
+    Input({"type": "timeline-tile", "matchId": ALL}, "n_clicks"),
+    State({"type": "timeline-tile", "matchId": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def on_timeline_tile_click(clicks, ids):
+    # Find which tile was clicked
+    if not clicks or not ids:
+        raise PreventUpdate
+    target_mid = None
+    for c, ident in zip(clicks, ids):
+        if (c or 0) > 0 and isinstance(ident, dict):
+            mid = ident.get("matchId")
+            if isinstance(mid, int) and mid > 0:
+                target_mid = mid
+                break
+    if not target_mid:
+        raise PreventUpdate
+
+    # Ensure the target card exists within the current loaded count; if not, bump count to include it.
+    # We assume history shows latest first (df sorted by Match ID desc); determine index of target.
+    try:
+        tmp = df.copy()
+        if "Match ID" in tmp.columns:
+            tmp["Match ID"] = pd.to_numeric(tmp["Match ID"], errors="coerce")
+            tmp = tmp.sort_values("Match ID", ascending=False).reset_index(drop=True)
+            pos = tmp.index[tmp["Match ID"] == target_mid]
+            needed = int(pos[0]) + 1 if len(pos) else 10
+        else:
+            needed = 50
+    except Exception:
+        needed = 50
+
+    # Cap to a reasonable chunk (multiples of 10)
+    needed = int(((needed + 9) // 10) * 10)
+    return "tab-history", {"count": needed}, f"#match-{target_mid}"
 
 
 @app.callback(
