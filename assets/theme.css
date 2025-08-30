@@ -1,7 +1,6 @@
 /* Prevent white overscroll flash and set global background */
 html, body { background-color: #ffffff; }
 #theme-root.dark ~ style, #theme-root.dark ~ link { color-scheme: dark; }
-#theme-root.dark ~ * {}
 #theme-root.dark body, #theme-root.dark html { background-color: #0f1115 !important; }
 #theme-root.dark { background-color: #0f1115; }
 /* Subtle Dark Mode Support */
@@ -144,3 +143,148 @@ html, body { background-color: #ffffff; }
 #theme-root.dark .brand-logo.dark-only { display: inline-block; }
 /* Only invert if class 'invert' is present (fallback case) */
 #theme-root.dark .brand-logo.dark-only.invert { filter: invert(1) saturate(120%) contrast(105%); }
+
+/* Daily date picker compact styling */
+.daily-date-picker {
+	font-size: 12px;
+	position: relative;
+}
+.daily-date-picker input {
+	padding: 4px 12px !important;
+	height: 30px !important;
+	line-height: 20px !important;
+	border-radius: 999px !important; /* pill */
+	border: 1px solid rgba(0,0,0,0.2) !important;
+	background: rgba(255,255,255,0.85) !important;
+	box-shadow: 0 2px 10px rgba(0,0,0,0.18) !important;
+	backdrop-filter: blur(4px) !important;
+	cursor: pointer !important;
+	caret-color: transparent !important; /* hide caret */
+	user-select: none !important; /* discourage typing */
+}
+.daily-date-picker input:hover {
+	box-shadow: 0 3px 12px rgba(0,0,0,0.25) !important;
+}
+.daily-date-picker input:focus {
+	outline: none !important;
+	border-color: #2563eb !important;
+	box-shadow: 0 0 0 2px rgba(37,99,235,0.35), 0 3px 12px rgba(0,0,0,0.25) !important;
+}
+.daily-date-picker .DateInput, .daily-date-picker .SingleDatePickerInput {
+	background: transparent !important;
+	border: none !important;
+}
+
+/* Dark theme for date picker */
+#theme-root.dark .daily-date-picker input {
+	background: rgba(0,0,0,0.5) !important;
+	color: #e5e7eb !important;
+	border: 1px solid rgba(255,255,255,0.28) !important;
+	box-shadow: 0 2px 12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05) inset !important;
+	backdrop-filter: blur(4px) !important;
+}
+#theme-root.dark .daily-date-picker input:hover {
+	box-shadow: 0 3px 16px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06) inset !important;
+}
+#theme-root.dark .daily-date-picker input:focus {
+	border-color: #60a5fa !important;
+	box-shadow: 0 0 0 2px rgba(96,165,250,0.4), 0 3px 16px rgba(0,0,0,0.6) !important;
+}
+
+/* Dark mode DatePicker input text and placeholder visibility */
+#theme-root.dark .daily-date-picker .DateInput_input {
+	color: #e5e7eb !important; /* input text */
+}
+#theme-root.dark .daily-date-picker .DateInput_input::placeholder {
+	color: #cbd5e1 !important; /* brighter placeholder for contrast */
+	opacity: 0.95 !important; /* ensure it doesn't fade too much */
+}
+#theme-root.dark .daily-date-picker input::placeholder {
+	color: #cbd5e1 !important;
+	opacity: 0.95 !important;
+}
+#theme-root.dark .daily-date-picker .SingleDatePicker_picker,
+#theme-root.dark .daily-date-picker .DayPicker,
+#theme-root.dark .daily-date-picker .DayPicker__withBorder,
+#theme-root.dark .daily-date-picker .CalendarMonth,
+#theme-root.dark .daily-date-picker .CalendarMonthGrid,
+#theme-root.dark .daily-date-picker .DayPicker_weekHeader,
+#theme-root.dark .daily-date-picker .CalendarMonth_caption {
+	background-color: #0f131b !important;
+	color: #e5e7eb !important;
+	border-color: rgba(255,255,255,0.18) !important;
+}
+#theme-root.dark .daily-date-picker .DayPicker__withBorder {
+	box-shadow: 0 6px 24px rgba(0,0,0,0.6) !important;
+}
+#theme-root.dark .daily-date-picker .CalendarDay__default {
+	background: #0f131b !important;
+	color: #e5e7eb !important;
+	border: 1px solid #1f2937 !important;
+}
+#theme-root.dark .daily-date-picker .CalendarDay__hovered_span,
+#theme-root.dark .daily-date-picker .CalendarDay__hovered,
+#theme-root.dark .daily-date-picker .CalendarDay__selected_span {
+	background: #1a2132 !important;
+	color: #fff !important;
+}
+#theme-root.dark .daily-date-picker .DayPickerNavigation__horizontalDefault {
+	background: transparent !important;
+}
+#theme-root.dark .daily-date-picker .DayPickerNavigation_button,
+#theme-root.dark .daily-date-picker .DayPickerNavigation__horizontal,
+#theme-root.dark .daily-date-picker .DayPickerNavigation__horizontalDefault {
+	background-color: #0f131b !important;
+	border-color: rgba(255,255,255,0.18) !important;
+}
+#theme-root.dark .daily-date-picker .DayPickerNavigation_button__default {
+	border: 1px solid rgba(255,255,255,0.18) !important;
+	background-color: #121826 !important;
+	color: #e5e7eb !important;
+}
+#theme-root.dark .daily-date-picker .DayPickerNavigation_button__default:hover {
+	background-color: #1a2132 !important;
+}
+#theme-root.dark .daily-date-picker {
+	/* subtle dark halo when over images */
+	filter: drop-shadow(0 2px 10px rgba(0,0,0,0.45));
+}
+
+/* Dark mode: make outside/disabled (grayed out) dates visible */
+#theme-root.dark .daily-date-picker .CalendarDay__outside {
+	color: #9aa3b2 !important; /* softer gray for contrast on dark */
+	opacity: 0.7 !important;
+	background: #0f131b !important;
+	border-color: #243047 !important;
+}
+#theme-root.dark .daily-date-picker .CalendarDay__outside:hover {
+	background: #151a24 !important;
+	color: #e5e7eb !important;
+}
+#theme-root.dark .daily-date-picker .CalendarDay__blocked_out_of_range,
+#theme-root.dark .daily-date-picker .CalendarDay__blocked_calendar {
+	color: #6b7280 !important; /* disabled */
+	background: #0f131b !important;
+	border-color: #2b3446 !important;
+	cursor: not-allowed !important;
+}
+#theme-root.dark .daily-date-picker .CalendarDay__blocked_out_of_range:hover,
+#theme-root.dark .daily-date-picker .CalendarDay__blocked_calendar:hover {
+	background: #121826 !important;
+	color: #9aa3b2 !important;
+}
+
+/* Light mode calendar container tweak to soften white box */
+.daily-date-picker .SingleDatePicker_picker,
+.daily-date-picker .DayPicker,
+.daily-date-picker .DayPicker__withBorder,
+.daily-date-picker .CalendarMonth,
+.daily-date-picker .CalendarMonthGrid,
+.daily-date-picker .DayPicker_weekHeader,
+.daily-date-picker .CalendarMonth_caption {
+	background-color: #ffffff !important;
+	border-color: rgba(0,0,0,0.12) !important;
+}
+.daily-date-picker .DayPicker__withBorder {
+	box-shadow: 0 6px 24px rgba(0,0,0,0.2) !important;
+}

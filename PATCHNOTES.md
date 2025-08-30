@@ -1,3 +1,28 @@
+# Patchnotes – Branch daily_report
+
+### 2025-08-30 — Daily Report tab, date selection, and UX polish
+- New Daily Report tab with:
+  - Visual banner using “Map of the day” background; improved text contrast in light mode.
+  - Hero spotlights: “Most played hero”, “Biggest Flex” (with up to three hero avatars and translated “Distinct heroes”), “One Trick Pony” (portrait, games), and dynamic “<Hero>-Carry” (portrait, WR, games).
+  - Player lineup grid with roles, top hero, games, W/L, and winrate.
+  - Compact timeline: horizontal map tiles with W/L colored borders and small connectors; tiles are clickable and jump to the corresponding card in match history with smooth scroll.
+- Date selection and behavior:
+  - Static DatePicker pinned at the top-right of the banner; localized display format (DE: DD.MM.YYYY, EN: YYYY-MM-DD) and translated placeholder (Datum/Date).
+  - Prevent selecting future dates; initial visible month set to today.
+  - Fallback logic: if today (or a selected date) has no games, automatically show the last active day.
+    - Badge “Last active day” only appears on auto-fallback (not when the user explicitly picks a date).
+    - If a user-selected date has no games, show a clear notice: “No games on selected day — Showing last active day: …”.
+- Data loading and robustness:
+  - Header normalization for Excel inputs: maps common English/German variants to canonical columns (Win Lose, Map, Match ID, Datum; plus per-player Role/Hero), parses dates, and sorts by Match ID descending.
+- Internationalization (i18n):
+  - Added/used keys: newest_first, last_active_day, distinct_heroes, no_games_selected, showing_last_active, most_played_hero, map_of_the_day, date_placeholder; Daily tab label localized.
+- Dark mode and styling:
+  - DatePicker over banner made more visible: compact “pill” look, subtle halo/shadow, hover/focus ring.
+  - Dark mode calendar popover, grid, and nav arrows darkened; outside/disabled dates styled for readability.
+  - Dark mode DatePicker input/placeholder colors adjusted so “Date/Datum” is clearly readable.
+
+---
+
 # Patchnotes – Branch main
 
 ### 2025-08-23 — In-App Patchnotes-Seite hinzugefügt
