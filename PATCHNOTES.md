@@ -1,5 +1,10 @@
 # Patchnotes – Branch daily_report
 
+### 2025-08-31 — added times and duration formatting
+- M app.py
+- Notes: Daily and History now show the time of day for matches (EN: am/pm, DE: "Uhr"). Duration is standardized to m:ss and shown on the right in History. The Daily timeline shows a time chip only for today/future, and duplicate times on thumbnails were removed.
+ - Hinweise (DE): Match-Uhrzeiten werden jetzt angezeigt (z. B. 13:15 Uhr). Die Dauer ist vereinheitlicht (m:ss) und steht rechts in der Historie. Auf der Daily-Timeline erscheint die Zeit nur für heute/zukünftig; doppelte Zeiten auf Thumbnails wurden entfernt.
+
 ### 2025-08-30 — Daily Report tab, date selection, and UX polish
 - New Daily Report tab with:
   - Visual banner using “Map of the day” background; improved text contrast in light mode.

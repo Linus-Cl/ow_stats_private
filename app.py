@@ -181,7 +181,7 @@ def render_daily_report(active_tab, lang_data, selected_date):
         return bool(s) and s not in ("nicht dabei", "none", "nan")
 
     # Helper: robust time extraction (row-wise)
-    time_candidates = ["Uhrzeit", "Zeit", "Time", "Startzeit"]
+    time_candidates = ["Uhrzeit", "Zeit", "Time", "Startzeit", "Start"]
 
     def _extract_time_str(row) -> str:
         dt = row.get("Datum")
@@ -775,6 +775,136 @@ def render_daily_report(active_tab, lang_data, selected_date):
         _asc.append(False)
     dff_today_sorted = dff_day.sort_values(_sort_cols, ascending=_asc)
     tiles = []
+    
+    # Helpers to format time-of-day and duration for small chips on tiles
+    def _fmt_hhmm_from_val(val) -> str:
+        try:
+            if isinstance(val, pd.Timestamp) and pd.notna(val):
+                return val.strftime("%H:%M")
+        except Exception:
+            pass
+        return ""
+
+    def _fmt_hhmm_from_dict(g: dict) -> str:
+        # Prefer composed datetime
+        t = g.get("_dt_show")
+        s = _fmt_hhmm_from_val(t)
+        if s:
+            return s
+        # Try raw candidates
+        for k in ("Uhrzeit", "Zeit", "Time", "Startzeit", "Start"):
+            if k in g and pd.notna(g.get(k)):
+                v = g.get(k)
+                # Excel numeric fraction of day
+                if isinstance(v, (int, float)):
+                    try:
+                        frac = float(v) % 1.0
+                        secs = int(round(frac * 86400))
+                        h = secs // 3600
+                        m = (secs % 3600) // 60
+                        if 0 <= h < 24 and 0 <= m < 60:
+                            return f"{h:02d}:{m:02d}"
+                    except Exception:
+                        pass
+                vstr = str(v).strip()
+                # String forms like 9:30, 09:30
+                m = re.match(r"^(\d{1,2}):(\d{2})", vstr)
+                if m:
+                    hh = int(m.group(1)); mm = int(m.group(2))
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+                # Digits-only like 930 or 0930
+                if re.fullmatch(r"\d{3,4}", vstr):
+                    v4 = vstr.zfill(4)
+                    hh, mm = int(v4[:2]), int(v4[2:])
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+                # Full datetime string: try parsing and extract HH:MM
+                try:
+                    dtp = pd.to_datetime(vstr, errors="raise")
+                    if pd.notna(dtp):
+                        return pd.Timestamp(dtp).strftime("%H:%M")
+                except Exception:
+                    pass
+        return ""
+
+    def _fmt_duration_from_dict(g: dict) -> str:
+        # Try several column name variants for duration
+        cand = [
+            "Matchtime", "Dauer", "Duration", "Matchdauer", "Match Duration", "Spielzeit", "Length", "Zeitdauer",
+        ]
+        val = None
+        for k in cand:
+            if k in g and pd.notna(g.get(k)):
+                val = g.get(k)
+                break
+        # Fallback: separate minute/second columns
+        if (val is None) and ("Minute" in g or "Second" in g):
+            try:
+                m = int(g.get("Minute") or 0)
+                s = int(g.get("Second") or 0)
+                total_secs = max(0, m * 60 + s)
+                if total_secs <= 0:
+                    return ""
+                return f"{total_secs//60}:{total_secs%60:02d}"
+            except Exception:
+                pass
+        if val is None:
+            return ""
+        # Numeric seconds or fraction of day
+        if isinstance(val, (int, float)):
+            try:
+                # Heuristic: values <= 5 are likely fraction of a day; else assume seconds if < 10000 or minutes if < 1000
+                f = float(val)
+                if 0 < f <= 5:
+                    total_secs = int(round((f % 1.0) * 86400))
+                else:
+                    total_secs = int(round(f))
+                    # If looks like minutes (e.g., 12 for 12 minutes), convert to seconds when too small
+                    if total_secs < 300 and f < 100:  # under 5 minutes but numeric small; might be minutes
+                        total_secs *= 60
+                if total_secs <= 0:
+                    return ""
+                m = total_secs // 60; s = total_secs % 60
+                return f"{m}:{s:02d}"
+            except Exception:
+                return ""
+        # String forms: h:mm:ss, mm:ss, m:ss, possibly with spaces
+        s = str(val).strip()
+        # Replace comma with colon if needed
+        s = s.replace(",", ":")
+        m3 = re.match(r"^(\d+):(\d{2}):(\d{2})$", s)
+        if m3:
+            h, m, sec = map(int, m3.groups())
+            total = h*3600 + m*60 + sec
+            if total <= 0:
+                return ""
+            mm = total // 60; ss = total % 60
+            return f"{mm}:{ss:02d}"
+        m2 = re.match(r"^(\d{1,2}):(\d{2})$", s)
+        if m2:
+            m, sec = map(int, m2.groups())
+            total = m*60 + sec
+            if total <= 0:
+                return ""
+            return f"{m}:{sec:02d}"
+        # Fallback: digits only maybe seconds
+        if s.isdigit():
+            try:
+                total = int(s)
+                if total <= 0:
+                    return ""
+                m = total // 60; sec = total % 60
+                return f"{m}:{sec:02d}"
+            except Exception:
+                return ""
+        return ""
+
+    # Only show time-of-day chips for today or future days
+    try:
+        show_time_chip = bool(target_day >= today)
+    except Exception:
+        show_time_chip = False
     records = dff_today_sorted.to_dict(orient="records")
     for idx, game in enumerate(records):
         map_name = str(game.get("Map", tr("unknown_map", lang)))
@@ -782,18 +912,66 @@ def render_daily_report(active_tab, lang_data, selected_date):
         victory = bool(game.get("_win"))
         img_src = get_map_image_url(map_name)
         border_col = "#16a34a" if victory else "#dc2626"
+        time_chip = _fmt_hhmm_from_dict(game)
+        dur_chip = _fmt_duration_from_dict(game)
+        # Distinguish formats like history: add suffixes (German 'Uhr', English am/pm)
+        if time_chip:
+            if lang == "de":
+                time_disp = f"{time_chip} Uhr"
+            else:
+                # Convert HH:MM to h:mm am/pm
+                try:
+                    hh, mm = [int(x) for x in str(time_chip).split(":", 1)]
+                    suffix = "am" if hh < 12 else "pm"
+                    hour12 = (hh % 12) or 12
+                    time_disp = f"{hour12}:{mm:02d} {suffix}"
+                except Exception:
+                    time_disp = str(time_chip)
+        else:
+            time_disp = ""
+        dur_disp = f"{dur_chip} min" if dur_chip else ""
+
         tile = html.Div(
             [
                 html.Div(
-                    html.Img(
-                        src=img_src,
-                        style={
-                            "width": "100%",
-                            "height": "100%",
-                            "objectFit": "cover",
-                            "display": "block",
-                        },
-                        title=f"{map_name} • " + (tr("victory", lang) if victory else tr("defeat", lang)),
+                    html.Div(
+                        [
+                            html.Img(
+                                src=img_src,
+                                style={
+                                    "width": "100%",
+                                    "height": "100%",
+                                    "objectFit": "cover",
+                                    "display": "block",
+                                },
+                                title=(
+                                    f"{map_name} • "
+                                    + (tr("victory", lang) if victory else tr("defeat", lang))
+                                    + (f" • {time_disp}" if (show_time_chip and time_disp) else "")
+                                    + (f" • {dur_disp}" if dur_disp else "")
+                                ),
+                            ),
+                            # Top-left time-of-day chip
+                            (
+                                html.Div(
+                                    time_disp,
+                                    style={
+                                        "position": "absolute",
+                                        "top": "4px",
+                                        "left": "4px",
+                                        "background": "rgba(0,0,0,0.6)",
+                                        "color": "#e5e7eb",
+                                        "fontSize": "0.70rem",
+                                        "padding": "2px 6px",
+                                        "borderRadius": "6px",
+                                        "lineHeight": "1",
+                                    },
+                                )
+                                if (show_time_chip and time_disp)
+                                else html.Div()
+                            ),
+                        ],
+                        style={"position": "relative", "width": "100%", "height": "100%"},
                     ),
                     style={
                         "width": "84px",
@@ -806,17 +984,38 @@ def render_daily_report(active_tab, lang_data, selected_date):
                     },
                 ),
                 html.Div(
-                    map_name,
-                    className="text-muted",
-                    style={
-                        "fontSize": "0.75rem",
-                        "textAlign": "center",
-                        "marginTop": "4px",
-                        "maxWidth": "84px",
-                        "whiteSpace": "nowrap",
-                        "overflow": "hidden",
-                        "textOverflow": "ellipsis",
-                    },
+                    [
+                        html.Div(
+                            map_name,
+                            className="text-muted",
+                            style={
+                                "fontSize": "0.75rem",
+                                "textAlign": "center",
+                                "marginTop": "4px",
+                                "maxWidth": "84px",
+                                "whiteSpace": "nowrap",
+                                "overflow": "hidden",
+                                "textOverflow": "ellipsis",
+                            },
+                        ),
+                        (
+                            html.Div(
+                                dur_disp,
+                                className="text-muted",
+                                style={
+                                    "fontSize": "0.68rem",
+                                    "textAlign": "center",
+                                    "marginTop": "2px",
+                                    "maxWidth": "84px",
+                                    "whiteSpace": "nowrap",
+                                    "overflow": "hidden",
+                                    "textOverflow": "ellipsis",
+                                },
+                            )
+                            if dur_disp
+                            else html.Div()
+                        ),
+                    ]
                 ),
             ],
             id={"type": "timeline-tile", "matchId": int(_mid) if (pd.notna(_mid)) else -1},
@@ -828,14 +1027,13 @@ def render_daily_report(active_tab, lang_data, selected_date):
         if idx < len(records) - 1:
             tiles.append(
                 html.Div(
-                    # small arrowhead pointing left (triangle only)
                     style={
                         "width": 0,
                         "height": 0,
                         "borderTop": "6px solid transparent",
                         "borderBottom": "6px solid transparent",
                         "borderRight": "8px solid rgba(156,163,175,0.7)",
-                        "marginTop": "25px",  # vertically center near tile middle
+                        "marginTop": "25px",
                         "flex": "0 0 auto",
                     },
                     title="",
@@ -2891,8 +3089,22 @@ def _describe_change(subj: str, files: list[str] | None, lang: str) -> str:
             },
         ),
         (
+            "added times",
+            {
+                "de": "Die Match-Uhrzeiten werden jetzt angezeigt (z. B. 13:15 Uhr). Die Dauer ist vereinheitlicht (m:ss) und steht in der Historie rechts. Auf der Daily-Timeline wird die Zeit nur für heute/ zukünftige Spiele als Chip gezeigt.",
+                "en": "Match time of day is now displayed (e.g., 1:15 pm). Duration is standardized to m:ss and shown on the right in History. On the Daily timeline, a time chip only appears for today/future.",
+            },
+        ),
+        (
             "daily report",
             {"de": "Tagesreport", "en": "Daily Report"},
+        ),
+        (
+            "added times",
+            {
+                "de": "Uhrzeiten und Spieldauer",
+                "en": "Match times and duration",
+            },
         ),
     ]
     for key, loc in mapping:
@@ -3413,12 +3625,115 @@ def calculate_winrate(data, group_col):
     return grouped.reset_index().sort_values("Winrate", ascending=False)
 
 
-def generate_history_layout_simple(games_df):
+def generate_history_layout_simple(games_df, lang: str = "en"):
     if games_df.empty:
         return [dbc.Alert("Keine Match History verfügbar.", color="info")]
 
     history_items = []
     last_season = None
+
+    # Helpers to format time-of-day and duration for subtext
+    def _fmt_time_row(row) -> str:
+        try:
+            dt = row.get("Datum")
+            if isinstance(dt, pd.Timestamp) and pd.notna(dt) and (dt.hour or dt.minute or dt.second):
+                return dt.strftime("%H:%M")
+        except Exception:
+            pass
+        for k in ("Uhrzeit", "Zeit", "Time", "Startzeit", "Start"):
+            if k in row and pd.notna(row.get(k)):
+                v = row.get(k)
+                if isinstance(v, (int, float)):
+                    try:
+                        frac = float(v) % 1.0
+                        secs = int(round(frac * 86400))
+                        h = secs // 3600
+                        m = (secs % 3600) // 60
+                        if 0 <= h < 24 and 0 <= m < 60:
+                            return f"{h:02d}:{m:02d}"
+                    except Exception:
+                        pass
+                s = str(v).strip().replace(",", ":")
+                m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+                if m:
+                    hh, mm = int(m.group(1)), int(m.group(2))
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+                if re.fullmatch(r"\d{3,4}", s):
+                    s2 = s.zfill(4)
+                    hh, mm = int(s2[:2]), int(s2[2:])
+                    if 0 <= hh < 24 and 0 <= mm < 60:
+                        return f"{hh:02d}:{mm:02d}"
+                # Full datetime string fallback
+                try:
+                    dtp = pd.to_datetime(s, errors="raise")
+                    if pd.notna(dtp):
+                        return pd.Timestamp(dtp).strftime("%H:%M")
+                except Exception:
+                    pass
+        return ""
+
+    def _fmt_duration_row(row) -> str:
+        for k in ("Matchtime", "Dauer", "Duration", "Matchdauer", "Match Duration", "Spielzeit", "Length", "Zeitdauer"):
+            if k in row and pd.notna(row.get(k)):
+                val = row.get(k)
+                break
+        else:
+            val = None
+        # Fallback: minute/second columns
+        if (val is None) and ("Minute" in row or "Second" in row):
+            try:
+                m = int(row.get("Minute") or 0)
+                s = int(row.get("Second") or 0)
+                total_secs = max(0, m * 60 + s)
+                if total_secs <= 0:
+                    return ""
+                return f"{total_secs//60}:{total_secs%60:02d}"
+            except Exception:
+                pass
+        if val is None:
+            return ""
+        if isinstance(val, (int, float)):
+            try:
+                f = float(val)
+                if 0 < f <= 5:
+                    total_secs = int(round((f % 1.0) * 86400))
+                else:
+                    total_secs = int(round(f))
+                    if total_secs < 300 and f < 100:
+                        total_secs *= 60
+                if total_secs <= 0:
+                    return ""
+                m = total_secs // 60; s = total_secs % 60
+                return f"{m}:{s:02d}"
+            except Exception:
+                return ""
+        s = str(val).strip().replace(",", ":")
+        m3 = re.match(r"^(\d+):(\d{2}):(\d{2})$", s)
+        if m3:
+            h, m, sec = map(int, m3.groups())
+            total = h*3600 + m*60 + sec
+            if total <= 0:
+                return ""
+            mm = total // 60; ss = total % 60
+            return f"{mm}:{ss:02d}"
+        m2 = re.match(r"^(\d{1,2}):(\d{2})$", s)
+        if m2:
+            m, sec = map(int, m2.groups())
+            total = m*60 + sec
+            if total <= 0:
+                return ""
+            return f"{m}:{sec:02d}"
+        if s.isdigit():
+            try:
+                total = int(s)
+                if total <= 0:
+                    return ""
+                m = total // 60; sec = total % 60
+                return f"{m}:{sec:02d}"
+            except Exception:
+                return ""
+        return ""
 
     for idx, game in games_df.iterrows():
         if pd.isna(game.get("Map")):
@@ -3445,14 +3760,32 @@ def generate_history_layout_simple(games_df):
             else "Invalid Date"
         )
         result_color, result_text = (
-            ("success", "VICTORY")
-            if game.get("Win Lose") == "Win"
-            else ("danger", "DEFEAT")
+            ("success", "VICTORY") if game.get("Win Lose") == "Win" else ("danger", "DEFEAT")
         )
-        if att_def == "Attack Attack":
-            att_def_string = f"{gamemode} • {date_str}"
+        # Build subtext: gamemode • date • HH:MM (with localized suffix) • att/def (duration moved to right side)
+        time_str = _fmt_time_row(game)
+        dur_str = _fmt_duration_row(game)
+        # Add suffixes to clearly differentiate time-of-day vs duration
+        if time_str:
+            if lang == "de":
+                time_disp = f"{time_str} Uhr"
+            else:
+                try:
+                    hh, mm = [int(x) for x in str(time_str).split(":", 1)]
+                    suffix = "am" if hh < 12 else "pm"
+                    hour12 = (hh % 12) or 12
+                    time_disp = f"{hour12}:{mm:02d} {suffix}"
+                except Exception:
+                    time_disp = str(time_str)
         else:
-            att_def_string = f"{gamemode} • {date_str} • {att_def}"
+            time_disp = ""
+        dur_disp = (f"{dur_str} min" if dur_str else "")
+        parts = [str(gamemode).strip() or "", date_str]
+        if time_disp:
+            parts.append(time_disp)
+        if pd.notna(att_def) and str(att_def).strip() and att_def != "Attack Attack":
+            parts.append(str(att_def))
+        att_def_string = " • ".join([p for p in parts if p])
 
         # --- REVISED PLAYER LIST SECTION ---
         player_list_items = []
@@ -3536,11 +3869,21 @@ def generate_history_layout_simple(games_df):
                                                 ),
                                             ]
                                         ),
-                                        dbc.Badge(
-                                            result_text,
-                                            color=result_color,
-                                            className="ms-auto",
-                                            style={"height": "fit-content"},
+                                        html.Div(
+                                            [
+                                                (html.Small(
+                                                    dur_disp,
+                                                    className="text-muted me-2",
+                                                    style={"whiteSpace": "nowrap"},
+                                                ) if dur_disp else html.Div()),
+                                                dbc.Badge(
+                                                    result_text,
+                                                    color=result_color,
+                                                    className="ms-auto",
+                                                    style={"height": "fit-content"},
+                                                ),
+                                            ],
+                                            className="d-flex align-items-center",
                                         ),
                                     ],
                                     className="d-flex justify-content-between align-items-center",
@@ -3916,11 +4259,12 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
     Input("player-dropdown-match-verlauf", "value"),
     Input("hero-filter-dropdown-match", "value"),
     Input("dummy-output", "children"),
+    Input("lang-store", "data"),
     State("history-display-count-store", "data"),
     State("history-load-amount-dropdown", "value"),
 )
 def update_history_display(
-    n_clicks, store_data_in, player_name, hero_name, _, current_store, load_amount
+    n_clicks, store_data_in, player_name, hero_name, _, lang_data, current_store, load_amount
 ):
     global df
     if df.empty:
@@ -3970,7 +4314,8 @@ def update_history_display(
         filtered_df = filtered_df[mask]
 
     games_to_show = filtered_df.head(new_count)
-    history_layout = generate_history_layout_simple(games_to_show)
+    lang = (lang_data or {}).get("lang", "en")
+    history_layout = generate_history_layout_simple(games_to_show, lang)
 
     if games_to_show.empty:
         history_layout = [
