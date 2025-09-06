@@ -34,6 +34,11 @@ app = Dash(
     suppress_callback_exceptions=True,
 )
 server = app.server
+# Reduce static asset caching in production to avoid stale frontend/client mismatch after deploys
+try:
+    server.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+except Exception:
+    pass
 df = pd.DataFrame()
 # In-Memory cache markers for conditional downloads
 _last_etag = None
@@ -42,6 +47,20 @@ _last_hash = None
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
+
+# Gracefully handle rare stale Dash client payloads after server restarts (PythonAnywhere)
+@server.errorhandler(IndexError)
+def _handle_index_error(e):
+    try:
+        p = request.path or ""
+    except Exception:
+        p = ""
+    # If a browser holds an outdated dependency map and posts to the old callback layout,
+    # Dash can raise IndexError when mapping inputs/state. Return 204 to let the client recover.
+    if p.endswith("/_dash-update-component"):
+        return ("", 204)
+    # fall back to default handling for non-Dash routes
+    return ("", 500)
 
 
 @server.route("/bye", methods=["POST"])
