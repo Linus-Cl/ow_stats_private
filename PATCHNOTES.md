@@ -1,5 +1,27 @@
 # Patchnotes – Branch daily_report
 
+### 2025-09-08 — flag icons
+- M app.py
+- M assets/theme.css
+- Notes: Language switcher now uses crisp SVG flags with cleaner styling.
+
+### 2025-09-08 — daily banner tie-break
+- M app.py
+- Notes: When multiple maps tie for most played, the banner now prefers the one with the higher winrate.
+
+### 2025-09-08 — per-role winrate badges
+- M app.py
+- M assets/theme.css
+- Notes: Player lineup shows per-role winrate badges with tooltips; badges aren’t text-selectable and use an arrow cursor.
+
+### 2025-09-08 — daily default tab
+- M app.py
+- Notes: Daily Report is now the first tab and the default landing page.
+
+### 2025-09-08 — map image fallback
+- M app.py
+- Notes: Safer default map image when no specific asset exists.
+
 ### 2025-08-31 — added times and duration formatting
 - M app.py
 - Notes: Daily and History now show the time of day for matches (EN: am/pm, DE: "Uhr"). Duration is standardized to m:ss and shown on the right in History. The Daily timeline shows a time chip only for today/future, and duplicate times on thumbnails were removed.
