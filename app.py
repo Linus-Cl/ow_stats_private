@@ -268,11 +268,34 @@ def render_daily_report(active_tab, lang_data, selected_date):
     # Top map and top hero of the day
     top_map = None
     top_map_wr = None
-    if "Map" in dff_day.columns:
-        top_map = dff_day["Map"].astype(str).value_counts().idxmax()
-        sub_map = dff_day[dff_day["Map"].astype(str) == str(top_map)]
-        if not sub_map.empty:
-            top_map_wr = float(sub_map["_win"].mean() * 100.0)
+    if "Map" in dff_day.columns and not dff_day.empty:
+        # Count plays by map
+        mseries = dff_day["Map"].astype(str)
+        counts = mseries.value_counts()
+        if not counts.empty:
+            max_plays = counts.max()
+            contenders = [m for m, c in counts.items() if c == max_plays]
+            if len(contenders) == 1:
+                top_map = contenders[0]
+                sub_map = dff_day[mseries == str(top_map)]
+                if not sub_map.empty:
+                    top_map_wr = float(sub_map["_win"].mean() * 100.0)
+            else:
+                # Tie on play count: pick the one with higher winrate
+                best = None
+                best_wr = -1.0
+                for m in contenders:
+                    sub = dff_day[mseries == str(m)]
+                    if sub.empty:
+                        continue
+                    wr_m = float(sub["_win"].mean() * 100.0) if "_win" in sub.columns else 0.0
+                    # Choose strictly greater WR; if equal, keep first seen
+                    if wr_m > best_wr:
+                        best = m
+                        best_wr = wr_m
+                if best is not None:
+                    top_map = best
+                    top_map_wr = best_wr
 
     top_hero = None
     top_hero_wr = None
@@ -497,6 +520,21 @@ def render_daily_report(active_tab, lang_data, selected_date):
         # roles played
         roles_p = sub[role_col_name].dropna().astype(str).str.strip().tolist()
         roles_p = sorted({r for r in roles_p if r and r.lower() != "nicht dabei"})
+        # per-role winrates for this player today
+        role_wr_map = {}
+        if roles_p:
+            roles_series = sub[role_col_name].dropna().astype(str).str.strip()
+            roles_series = roles_series[roles_series.str.lower() != "nicht dabei"]
+            if not roles_series.empty:
+                for role_name in sorted(set(roles_series.tolist())):
+                    sub_role = sub[roles_series == role_name]
+                    if sub_role is None or sub_role.empty:
+                        continue
+                    games_r = int(len(sub_role))
+                    wr_r = float(sub_role["_win"].mean() * 100.0) if games_r else 0.0
+                    wins_r = int(sub_role["_win"].sum())
+                    losses_r = games_r - wins_r
+                    role_wr_map[str(role_name)] = {"wr": wr_r, "games": games_r, "wins": wins_r, "losses": losses_r}
         # top hero for this player
         hero_col_name = f"{p} Hero"
         top_hero_p = None
@@ -512,6 +550,7 @@ def render_daily_report(active_tab, lang_data, selected_date):
             "losses": losses_p,
             "wr": wr_p,
             "roles": roles_p,
+            "role_wr": role_wr_map,
             "top_hero": top_hero_p,
         })
 
@@ -738,10 +777,45 @@ def render_daily_report(active_tab, lang_data, selected_date):
     lineup_cards = []
     role_color = {"Tank": "warning", "Damage": "danger", "Support": "success"}
     for r in player_rows:
-        badges = [
-            dbc.Badge(role, color=role_color.get(role, "secondary"), className="me-1")
-            for role in r["roles"]
-        ]
+        # Build compact per-role WR chips (e.g., Tank 67%) with role color
+        badges = []
+        role_wr = r.get("role_wr") or {}
+        if role_wr:
+            for role in sorted(role_wr.keys()):
+                stats = role_wr.get(role) or {}
+                wrv = stats.get("wr")
+                gamesv = stats.get("games")
+                winsv = stats.get("wins")
+                lossesv = stats.get("losses")
+                label = f"{role} {wrv:.0f}%" if wrv is not None else str(role)
+                tooltip_text = None
+                if gamesv is not None and winsv is not None and lossesv is not None:
+                    tooltip_text = f"{tr('games', lang)}: {gamesv} • {winsv}-{lossesv}"
+                # Unique, safe id per badge for tooltip target
+                safe_id = re.sub(r"[^a-z0-9_-]", "-", f"rb-{r['player']}-{role}".lower())
+                badges.append(
+                    dbc.Badge(
+                        label,
+                        id=safe_id,
+                        color=role_color.get(role, "secondary"),
+                        className="role-badge me-1",
+                        pill=True,
+                    )
+                )
+                if tooltip_text:
+                    badges.append(
+                        dbc.Tooltip(
+                            tooltip_text,
+                            target=safe_id,
+                            placement="top",
+                            delay={"show": 150, "hide": 50},
+                        )
+                    )
+        else:
+            badges = [
+                dbc.Badge(role, color=role_color.get(role, "secondary"), className="role-badge me-1")
+                for role in r["roles"]
+            ]
         lineup_cards.append(
             dbc.Col(
                 dbc.Card(
@@ -1779,34 +1853,41 @@ app.layout = html.Div(
                                         [
                                             dbc.Button(
                                                 html.Img(
-                                                    src="https://flagcdn.com/w20/gb.png",
+                                                    src="https://flagcdn.com/gb.svg",
                                                     title="English",
                                                     alt="English",
+                                                    draggable=False,
+                                                    className="lang-flag",
                                                     style={
-                                                        "height": "16px",
+                                                        "height": "20px",
                                                         "width": "auto",
+                                                        "display": "block",
                                                     },
                                                 ),
                                                 id="btn-lang-en",
                                                 color="secondary",
                                                 outline=True,
                                                 size="sm",
-                                                className="me-1",
+                                                className="me-1 lang-btn",
                                             ),
                                             dbc.Button(
                                                 html.Img(
-                                                    src="https://flagcdn.com/w20/de.png",
+                                                    src="https://flagcdn.com/de.svg",
                                                     title="Deutsch",
                                                     alt="Deutsch",
+                                                    draggable=False,
+                                                    className="lang-flag",
                                                     style={
-                                                        "height": "16px",
+                                                        "height": "20px",
                                                         "width": "auto",
+                                                        "display": "block",
                                                     },
                                                 ),
                                                 id="btn-lang-de",
                                                 color="secondary",
                                                 outline=True,
                                                 size="sm",
+                                                className="lang-btn",
                                             ),
                                         ],
                                         className="d-flex flex-row mt-4 mb-1",
@@ -1924,6 +2005,41 @@ app.layout = html.Div(
                             [
                                 dbc.Tabs(
                                     [
+                                        dbc.Tab(
+                                            id="tab-comp-daily",
+                                            label="Daily Report",
+                                            tab_id="tab-daily",
+                                            children=[
+                                                # Static, overlaid date picker positioned relative within the summary wrapper
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            dcc.DatePickerSingle(
+                                                                id="daily-date",
+                                                                display_format="YYYY-MM-DD",
+                                                                max_date_allowed=pd.Timestamp.now().normalize().date(),
+                                                                initial_visible_month=pd.Timestamp.now().normalize().date(),
+                                                                clearable=True,
+                                                                placeholder="Date",
+                                                                className="daily-date-picker",
+                                                            ),
+                                                            style={
+                                                                "position": "absolute",
+                                                                "top": "10px",
+                                                                "right": "10px",
+                                                                "zIndex": 4,
+                                                                "padding": "2px",
+                                                                "borderRadius": "999px",
+                                                                "background": "radial-gradient(closest-side, rgba(255,255,255,0.5), rgba(255,255,255,0) 70%)",
+                                                            },
+                                                        ),
+                                                        html.Div(id="daily-summary", className="mb-3"),
+                                                    ],
+                                                    style={"position": "relative"},
+                                                ),
+                                                html.Div(id="daily-report-container"),
+                                            ],
+                                        ),
                                         dbc.Tab(
                                             id="tab-comp-map",
                                             label="Map & Mode Statistik",
@@ -2150,41 +2266,6 @@ app.layout = html.Div(
                                             ],
                                         ),
                                         dbc.Tab(
-                                            id="tab-comp-daily",
-                                            label="Daily Report",
-                                            tab_id="tab-daily",
-                                            children=[
-                                                # Static, overlaid date picker positioned relative within the summary wrapper
-                                                html.Div(
-                                                    [
-                                                        html.Div(
-                                                            dcc.DatePickerSingle(
-                                                                id="daily-date",
-                                                                display_format="YYYY-MM-DD",
-                                                                max_date_allowed=pd.Timestamp.now().normalize().date(),
-                                                                initial_visible_month=pd.Timestamp.now().normalize().date(),
-                                                                clearable=True,
-                                                                placeholder="Date",
-                                                                className="daily-date-picker",
-                                                            ),
-                                                            style={
-                                                                "position": "absolute",
-                                                                "top": "10px",
-                                                                "right": "10px",
-                                                                "zIndex": 4,
-                                                                "padding": "2px",
-                                                                "borderRadius": "999px",
-                                                                "background": "radial-gradient(closest-side, rgba(255,255,255,0.5), rgba(255,255,255,0) 70%)",
-                                                            },
-                                                        ),
-                                                        html.Div(id="daily-summary", className="mb-3"),
-                                                    ],
-                                                    style={"position": "relative"},
-                                                ),
-                                                html.Div(id="daily-report-container"),
-                                            ],
-                                        ),
-                                        dbc.Tab(
                                             id="tab-comp-hero",
                                             label="Held Statistik",
                                             tab_id="tab-hero",
@@ -2351,7 +2432,7 @@ app.layout = html.Div(
                                         ),
                                     ],
                                     id="tabs",
-                                    active_tab="tab-map",
+                                    active_tab="tab-daily",
                                 )
                             ],
                             width=9,
@@ -2606,6 +2687,11 @@ def _parse_patchnotes_entries(md_text: str) -> list[dict]:
 def _beautify_subject(subj: str, lang: str) -> str:
     s = (subj or "").strip().lower()
     mapping = [
+    ("flag icons", {"de": "Sprach-Flags in hoher Qualität", "en": "High-quality language flags"}),
+    ("daily banner tie-break", {"de": "Banner: Gleichstand per Winrate auflösen", "en": "Banner: tie-break by winrate"}),
+    ("per-role winrate badges", {"de": "Rollenspezifische Winrate-Badges", "en": "Per-role winrate badges"}),
+    ("daily default tab", {"de": "Tagesreport als Startansicht", "en": "Daily Report as default tab"}),
+    ("map image fallback", {"de": "Robuster Kartenbild-Fallback", "en": "Robust map image fallback"}),
         # Explicit UI actions and common synonyms
         ("sync button", {"de": "Sync-Button hinzugefügt", "en": "Added sync button"}),
         ("update button", {"de": "Sync-Button hinzugefügt", "en": "Added sync button"}),
@@ -2820,6 +2906,41 @@ def _describe_change(subj: str, files: list[str] | None, lang: str) -> str:
         return x
 
     mapping = [
+        (
+            "flag icons",
+            {
+                "de": "Die Sprachauswahl nutzt jetzt gestochen scharfe SVG-Flags und wirkt visuell ruhiger.",
+                "en": "The language switcher now uses crisp SVG flags with a cleaner look.",
+            },
+        ),
+        (
+            "daily banner tie-break",
+            {
+                "de": "Bei gleich vielen gespielten Maps entscheidet jetzt die höhere Winrate, welche Map im Banner gezeigt wird.",
+                "en": "If multiple maps tie on plays, the banner now prefers the one with the higher win rate.",
+            },
+        ),
+        (
+            "per-role winrate badges",
+            {
+                "de": "Im Tagesreport zeigt die Aufstellung pro Spieler farbige Badges mit Rollenzuordnung und Winrate. Tooltips nennen Spiele sowie Siege/Niederlagen.",
+                "en": "In the daily report, each player now has color-coded badges showing role and win rate. Tooltips include games and W/L.",
+            },
+        ),
+        (
+            "daily default tab",
+            {
+                "de": "Der Tagesreport ist jetzt die erste Registerkarte und die Standard-Startseite.",
+                "en": "The Daily Report is now the first tab and the default landing page.",
+            },
+        ),
+        (
+            "map image fallback",
+            {
+                "de": "Fehlt ein spezifisches Bild für eine Map, wird zuverlässig ein neutrales Standardbild angezeigt.",
+                "en": "If a specific map image is missing, a safe default image is shown reliably.",
+            },
+        ),
         (
             "sync button",
             {
@@ -3502,7 +3623,7 @@ def get_map_image_url(map_name):
     Assumes images are in 'assets/maps/' and named like 'map_name.png'.
     """
     if not isinstance(map_name, str):
-        return "/assets/maps/default.jpg"  # Fallback for non-string input
+        return "/assets/maps/default.png"  # Fallback for non-string input
 
     # Clean the map name to create a valid filename
     # e.g., "King's Row" -> "kings_row"

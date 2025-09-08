@@ -144,6 +144,37 @@ html, body { background-color: #ffffff; }
 /* Only invert if class 'invert' is present (fallback case) */
 #theme-root.dark .brand-logo.dark-only.invert { filter: invert(1) saturate(120%) contrast(105%); }
 
+/* Language flags: ensure crisp scaling and comfortable click target */
+.lang-btn {
+	padding: 0.125rem 0.375rem !important; /* slim but clickable */
+	line-height: 1 !important;
+	border: none !important;
+	background: transparent !important;
+	box-shadow: none !important;
+}
+.lang-btn:hover {
+	background: rgba(0,0,0,0.06) !important;
+}
+.lang-btn:focus, .lang-btn:active {
+	box-shadow: none !important;
+}
+.lang-btn.btn-outline-secondary {
+	border: none !important;
+}
+.lang-flag {
+	image-rendering: -webkit-optimize-contrast;
+	image-rendering: crisp-edges;
+	-ms-interpolation-mode: nearest-neighbor; /* legacy */
+	border-radius: 0; /* remove edge */
+	display: block;
+}
+#theme-root.dark .lang-btn {
+	color: #e5e7eb !important;
+}
+#theme-root.dark .lang-btn:hover {
+	background-color: #1a2132 !important;
+}
+
 /* Daily date picker compact styling */
 .daily-date-picker {
 	font-size: 12px;
@@ -248,6 +279,14 @@ html, body { background-color: #ffffff; }
 #theme-root.dark .daily-date-picker {
 	/* subtle dark halo when over images */
 	filter: drop-shadow(0 2px 10px rgba(0,0,0,0.45));
+}
+
+/* Role WR badges: avoid text cursor and selection */
+.role-badge {
+	cursor: default !important; /* arrow cursor */
+	user-select: none !important; /* no text selection */
+	-webkit-user-select: none !important;
+	-ms-user-select: none !important;
 }
 
 /* Dark mode: make outside/disabled (grayed out) dates visible */
