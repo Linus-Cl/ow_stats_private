@@ -3654,6 +3654,18 @@ def get_hero_image_url(hero_name):
 
     base_name = hero_name.lower()
 
+    # Known alias mappings: map various inputs to the canonical asset basename
+    # Keys should be aggressively cleaned (alphanumerics only)
+    alias_map = {
+        # Wrecking Ball
+        "wreckingball": "wrecking_ball",
+        "hammond": "wrecking_ball",
+        # Soldier 76 variations end up covered by cleaning rules, but keep explicit for clarity
+        "soldier76": "soldier_76",
+        # Torbjorn without umlaut
+        "torbjorn": "torbjörn",
+    }
+
     # --- Create a list of potential filenames to try ---
     potential_names = []
 
@@ -3668,6 +3680,14 @@ def get_hero_image_url(hero_name):
     potential_names.append(re.sub(r"[^a-z0-9]", "", base_name))
 
     # Remove any duplicate names that may have been generated
+    potential_names = list(set(potential_names))
+
+    # 3. Add alias-based canonical names (e.g., "wreckingball" -> "wrecking_ball")
+    cleaned_key = re.sub(r"[^a-z0-9]", "", base_name)
+    if cleaned_key in alias_map:
+        potential_names.append(alias_map[cleaned_key])
+
+    # Remove duplicates again in case alias matched an existing variant
     potential_names = list(set(potential_names))
 
     # --- Now, check if a file exists for any of these variations ---
