@@ -4002,6 +4002,12 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
                 anchor_id = f"match-{int(game.get('Match ID'))}"
         except Exception:
             anchor_id = None
+        
+        # Build card kwargs - only include id if anchor_id is valid
+        card_kwargs = {"className": "mb-3"}
+        if anchor_id is not None:
+            card_kwargs["id"] = anchor_id
+            
         card = dbc.Card(
             dbc.Row(
                 [
@@ -4059,8 +4065,7 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
                 ],
                 className="g-0",
             ),
-            className="mb-3",
-            id=anchor_id,
+            **card_kwargs,
         )
         history_items.append(card)
 
@@ -4472,6 +4477,13 @@ def update_history_display(
         # Create a boolean mask. True if any of the hero columns for a row equals the hero_name
         mask = filtered_df[hero_cols].eq(hero_name).any(axis=1)
         filtered_df = filtered_df[mask]
+
+    # Ensure newest matches are shown first
+    if "Match ID" in filtered_df.columns:
+        filtered_df = filtered_df.sort_values("Match ID", ascending=False)
+    elif "Datum" in filtered_df.columns:
+        # Fallback to date sorting if Match ID is not available
+        filtered_df = filtered_df.sort_values("Datum", ascending=False)
 
     games_to_show = filtered_df.head(new_count)
     lang = (lang_data or {}).get("lang", "en")
