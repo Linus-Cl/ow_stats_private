@@ -44,6 +44,8 @@ df = pd.DataFrame()
 _last_etag = None
 _last_modified = None
 _last_hash = None
+_update_lock = threading.Lock()
+_update_in_progress = False
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
@@ -1651,6 +1653,40 @@ def _background_updater():
         except Exception:
             pass
         time.sleep(interval_s)
+
+
+def _start_async_update(force: bool = False) -> bool:
+    """Start a background thread to update data without blocking the request.
+
+    Returns True if a new update was started, False if an update is already running.
+    """
+    global _update_in_progress
+
+    # Ensure only one on-demand update runs at a time (per process)
+    with _update_lock:
+        if _update_in_progress:
+            return False
+        _update_in_progress = True
+
+    def _worker():
+        global _update_in_progress
+        try:
+            updated = _fetch_update_from_cloud(force=force)
+            if updated and _last_hash:
+                try:
+                    _set_app_state("data_token", _last_hash)
+                except Exception:
+                    pass
+        except Exception:
+            # Swallow all exceptions to avoid killing the thread silently
+            pass
+        finally:
+            with _update_lock:
+                _update_in_progress = False
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return True
 
 
 try:
@@ -4182,25 +4218,16 @@ def build_detailed_hero_selectors(
 def update_data(n_clicks, n_intervals):
     triggered = ctx.triggered_id if ctx.triggered_id else None
     if triggered == "update-data-button" and (n_clicks or 0) > 0:
-        updated = _fetch_update_from_cloud(force=True)
-        if updated:
-            # Persist a server-wide token so all workers/sessions can detect the change
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-            return f"Data updated at {pd.Timestamp.now()}"
+        # Start a background update so the request returns immediately
+        started = _start_async_update(force=True)
+        if started:
+            # Child value is not user-visible; just a trace string
+            return f"Async update started at {pd.Timestamp.now()}"
         return no_update
     if triggered == "auto-update-tick":
-        updated = _fetch_update_from_cloud(force=False)
-        if updated:
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-            return f"Data updated at {pd.Timestamp.now()}"
+        # Use the same non-blocking mechanism for automatic updates; if an
+        # update is already running, this becomes a no-op.
+        _start_async_update(force=False)
         return no_update
     return no_update
 
@@ -4256,7 +4283,7 @@ def update_filter_options(_):
     ]
     year_options = [
         {"label": str(int(y)), "value": int(y)}
-        for y in sorted(df["Jahr"].dropna().unique())
+        for y in sorted(df["Jahr"].dropna().unique(), reverse=True)
     ]
     return season_options, month_options, year_options
 
