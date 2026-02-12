@@ -1,5 +1,10 @@
 # Patchnotes – Branch daily_report
 
+### 2026-02-12 — season display rebrand + descending season dropdown
+- M app.py
+- Notes: Seasons 1–20 keep their original labels. Starting with raw season 21, labels now display as "YYYY: Season N" with 6 seasons per year (e.g., 21→2026: Season 1, 26→2026: Season 6, 27→2027: Season 1). Sorting and filtering still use the original season numbers from the data; only the UI labels changed. The season dropdown in the left sidebar is now sorted descending by season number.
+- Hinweise (DE): Die Seasons 1–20 behalten ihre bisherigen Bezeichnungen. Ab der rohen Season 21 wird in der Anzeige jetzt das Format „YYYY: Season N“ genutzt (6 Seasons pro Jahr; z. B. 21→2026: Season 1, 26→2026: Season 6, 27→2027: Season 1). Sortierung und Filterung nutzen weiterhin die originalen Season-Nummern aus den Daten; geändert wurde nur die Darstellung im UI. Das Season-Dropdown in der linken Seitenleiste ist jetzt absteigend nach Season-Nummer sortiert.
+
 ### 2025-09-08 — flag icons
 - M app.py
 - M assets/theme.css

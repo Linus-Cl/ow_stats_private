@@ -50,6 +50,41 @@ LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
 
+SEASON_REBRAND_START = 21
+SEASON_REBRAND_BASE_YEAR = 2026
+SEASONS_PER_YEAR = 6
+
+
+def _extract_season_number(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except Exception:
+            return None
+    match = re.search(r"\d+", str(value))
+    return int(match.group(0)) if match else None
+
+
+def format_season_display(value):
+    number = _extract_season_number(value)
+    if number is None:
+        return str(value)
+    if number < SEASON_REBRAND_START:
+        return f"Season {number}"
+    offset = number - SEASON_REBRAND_START
+    year = SEASON_REBRAND_BASE_YEAR + (offset // SEASONS_PER_YEAR)
+    season_in_year = (offset % SEASONS_PER_YEAR) + 1
+    return f"{year}: Season {season_in_year}"
+
+
+def season_sort_key(value):
+    number = _extract_season_number(value)
+    if number is None:
+        return (1, str(value))
+    return (0, number)
+
 # Gracefully handle rare stale Dash client payloads after server restarts (PythonAnywhere)
 @server.errorhandler(IndexError)
 def _handle_index_error(e):
@@ -2697,7 +2732,14 @@ def _parse_patchnotes_entries(md_text: str) -> list[dict]:
             # normalize date to YYYY-MM-DD
             date_norm = date_part.split(" ")[0]
             subject = header.split(" — ")[-1].strip()
-            current = {"date": date_norm, "subject": subject, "files": [], "notes": ""}
+            current = {
+                "date": date_norm,
+                "subject": subject,
+                "files": [],
+                "notes": "",
+                "notes_en": "",
+                "notes_de": "",
+            }
             i += 1
             continue
         if current is not None:
@@ -2711,6 +2753,11 @@ def _parse_patchnotes_entries(md_text: str) -> list[dict]:
                 # Notes line like "- Notes: ..."
                 note = line.split(":", 1)[1].strip() if ":" in line else ""
                 current["notes"] = note
+                current["notes_en"] = note
+            elif line.strip().lower().startswith("- hinweise"):
+                # German hints line like "- Hinweise (DE): ..."
+                note = line.split(":", 1)[1].strip() if ":" in line else ""
+                current["notes_de"] = note
             elif line.startswith("### "):
                 # handled above
                 pass
@@ -3335,13 +3382,13 @@ def patchnotes_page():
         meta = f"{nice_date} • " + ("Web-Update" if lang == "de" else "Web update")
         desc = _describe_change(subj_raw, files, lang)
         if not desc:
-            # fallback to notes only if language matches (simple heuristic)
-            notes = (e.get("notes") or "").strip()
-            if lang == "en" and notes and re.search(r"[A-Za-z]", notes):
-                desc = notes
-            elif lang == "de" and notes and re.search(r"[A-Za-z]", notes):
-                # notes are likely English – skip to avoid mixed language
-                desc = ""
+            # language-aware fallback notes from PATCHNOTES.md
+            notes_en = (e.get("notes_en") or e.get("notes") or "").strip()
+            notes_de = (e.get("notes_de") or "").strip()
+            if lang == "de":
+                desc = notes_de
+            else:
+                desc = notes_en
         if not desc:
             continue
         parts.append(
@@ -3937,8 +3984,7 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
 
         current_season = game.get("Season")
         if pd.notna(current_season) and current_season != last_season:
-            match = re.search(r"\d+", str(current_season))
-            season_text = f"Season {match.group(0)}" if match else str(current_season)
+            season_text = format_season_display(current_season)
             history_items.append(
                 dbc.Alert(
                     season_text, color="secondary", className="my-4 text-center fw-bold"
@@ -4274,9 +4320,11 @@ def poll_server_update_token(_n, current_token):
 def update_filter_options(_):
     if df.empty:
         return [], [], []
+    seasons = list(df["Season"].dropna().unique())
+    seasons.sort(key=season_sort_key, reverse=True)
     season_options = [
-        {"label": s, "value": s}
-        for s in sorted(df["Season"].dropna().unique(), reverse=True)
+        {"label": format_season_display(s), "value": s}
+        for s in seasons
     ]
     month_options = [
         {"label": m, "value": m} for m in sorted(df["Monat"].dropna().unique())
