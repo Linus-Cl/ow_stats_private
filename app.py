@@ -46,6 +46,8 @@ df = pd.DataFrame()
 _last_etag = None
 _last_modified = None
 _last_hash = None
+_update_lock = threading.Lock()
+_update_in_progress = False
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
@@ -1873,6 +1875,40 @@ def _background_updater():
         time.sleep(interval_s)
 
 
+def _start_async_update(force: bool = False) -> bool:
+    """Start a background thread to update data without blocking the request.
+
+    Returns True if a new update was started, False if an update is already running.
+    """
+    global _update_in_progress
+
+    # Ensure only one on-demand update runs at a time (per process)
+    with _update_lock:
+        if _update_in_progress:
+            return False
+        _update_in_progress = True
+
+    def _worker():
+        global _update_in_progress
+        try:
+            updated = _fetch_update_from_cloud(force=force)
+            if updated and _last_hash:
+                try:
+                    _set_app_state("data_token", _last_hash)
+                except Exception:
+                    pass
+        except Exception:
+            # Swallow all exceptions to avoid killing the thread silently
+            pass
+        finally:
+            with _update_lock:
+                _update_in_progress = False
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return True
+
+
 try:
     if os.environ.get("ENABLE_BG_UPDATER", "1") in ("1", "true", "TRUE"):
         t = threading.Thread(target=_background_updater, daemon=True)
@@ -2921,7 +2957,14 @@ def _parse_patchnotes_entries(md_text: str) -> list[dict]:
             # normalize date to YYYY-MM-DD
             date_norm = date_part.split(" ")[0]
             subject = header.split(" — ")[-1].strip()
-            current = {"date": date_norm, "subject": subject, "files": [], "notes": ""}
+            current = {
+                "date": date_norm,
+                "subject": subject,
+                "files": [],
+                "notes": "",
+                "notes_en": "",
+                "notes_de": "",
+            }
             i += 1
             continue
         if current is not None:
@@ -2935,6 +2978,11 @@ def _parse_patchnotes_entries(md_text: str) -> list[dict]:
                 # Notes line like "- Notes: ..."
                 note = line.split(":", 1)[1].strip() if ":" in line else ""
                 current["notes"] = note
+                current["notes_en"] = note
+            elif line.strip().lower().startswith("- hinweise"):
+                # German hints line like "- Hinweise (DE): ..."
+                note = line.split(":", 1)[1].strip() if ":" in line else ""
+                current["notes_de"] = note
             elif line.startswith("### "):
                 # handled above
                 pass
@@ -3580,13 +3628,13 @@ def patchnotes_page():
         meta = f"{nice_date} • " + ("Web-Update" if lang == "de" else "Web update")
         desc = _describe_change(subj_raw, files, lang)
         if not desc:
-            # fallback to notes only if language matches (simple heuristic)
-            notes = (e.get("notes") or "").strip()
-            if lang == "en" and notes and re.search(r"[A-Za-z]", notes):
-                desc = notes
-            elif lang == "de" and notes and re.search(r"[A-Za-z]", notes):
-                # notes are likely English – skip to avoid mixed language
-                desc = ""
+            # language-aware fallback notes from PATCHNOTES.md
+            notes_en = (e.get("notes_en") or e.get("notes") or "").strip()
+            notes_de = (e.get("notes_de") or "").strip()
+            if lang == "de":
+                desc = notes_de
+            else:
+                desc = notes_en
         if not desc:
             continue
         parts.append(
@@ -4550,8 +4598,7 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
 
         current_season = game.get("Season")
         if pd.notna(current_season) and current_season != last_season:
-            match = re.search(r"\d+", str(current_season))
-            season_text = f"Season {match.group(0)}" if match else str(current_season)
+            season_text = format_season_display(current_season)
             history_items.append(
                 dbc.Alert(
                     season_text, color="secondary", className="my-4 text-center fw-bold"
@@ -4653,6 +4700,12 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
                 anchor_id = f"match-{int(game.get('Match ID'))}"
         except Exception:
             anchor_id = None
+
+        # Build card kwargs - only include id if anchor_id is valid
+        card_kwargs = {"className": "mb-3"}
+        if anchor_id is not None:
+            card_kwargs["id"] = anchor_id
+
         card = dbc.Card(
             dbc.Row(
                 [
@@ -4714,8 +4767,7 @@ def generate_history_layout_simple(games_df, lang: str = "en"):
                 ],
                 className="g-0",
             ),
-            className="mb-3",
-            id=anchor_id,
+            **card_kwargs,
         )
         history_items.append(card)
 
@@ -4877,16 +4929,15 @@ def poll_server_update_token(_n, current_token):
 def update_filter_options(_):
     if df.empty:
         return [], [], []
-    season_options = [
-        {"label": s, "value": s}
-        for s in sorted(df["Season"].dropna().unique(), reverse=True)
-    ]
+    seasons = list(df["Season"].dropna().unique())
+    seasons.sort(key=season_sort_key, reverse=True)
+    season_options = [{"label": format_season_display(s), "value": s} for s in seasons]
     month_options = [
         {"label": m, "value": m} for m in sorted(df["Monat"].dropna().unique())
     ]
     year_options = [
         {"label": str(int(y)), "value": int(y)}
-        for y in sorted(df["Jahr"].dropna().unique())
+        for y in sorted(df["Jahr"].dropna().unique(), reverse=True)
     ]
     return season_options, month_options, year_options
 
@@ -5116,6 +5167,13 @@ def update_history_display(
         # Create a boolean mask. True if any of the hero columns for a row equals the hero_name
         mask = filtered_df[hero_cols].eq(hero_name).any(axis=1)
         filtered_df = filtered_df[mask]
+
+    # Ensure newest matches are shown first
+    if "Match ID" in filtered_df.columns:
+        filtered_df = filtered_df.sort_values("Match ID", ascending=False)
+    elif "Datum" in filtered_df.columns:
+        # Fallback to date sorting if Match ID is not available
+        filtered_df = filtered_df.sort_values("Datum", ascending=False)
 
     games_to_show = filtered_df.head(new_count)
     lang = (lang_data or {}).get("lang", "en")
