@@ -36,9 +36,10 @@ app = Dash(
     suppress_callback_exceptions=True,
 )
 server = app.server
-# Reduce static asset caching in production to avoid stale frontend/client mismatch after deploys
+# Static assets (hero/map images, CSS) should be cached by the browser
+# Only disable during local development if needed
 try:
-    server.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+    server.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400  # 1 day
 except Exception:
     pass
 df = pd.DataFrame()
@@ -2067,33 +2068,24 @@ app.layout = html.Div(
         html.Div(id="dummy-scroll-ack", style={"display": "none"}),
         # Hidden heartbeat output for server-side tracking
         html.Div(id="heartbeat-dummy", style={"display": "none"}),
-        # Hidden periodic auto-update (no UI elements added)
+        # Hidden periodic auto-update — disabled (Excel-sync removed, Firestore patches in-place)
         dcc.Interval(
             id="auto-update-tick",
-            interval=(
-                int(
-                    float(
-                        os.environ.get(
-                            "AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES
-                        )
-                    )
-                    * 60
-                    * 1000
-                )
-            ),
+            interval=3600 * 1000,  # 1h — effectively disabled
+            max_intervals=0,  # never fires
         ),
-        # Poll the server update token so all sessions pick up data changes
+        # Poll the server update token so all sessions pick up data changes (e.g. new match entered)
         dcc.Interval(
             id="server-update-poll",
-            interval=int(os.environ.get("POLL_UPDATE_SECONDS", "10")) * 1000,
+            interval=int(os.environ.get("POLL_UPDATE_SECONDS", "30")) * 1000,
             n_intervals=0,
         ),
         # Init client id once per tab
         dcc.Interval(id="client-init", interval=1000, n_intervals=0, max_intervals=1),
-        # Heartbeat every 15s
-        dcc.Interval(id="heartbeat", interval=10000, n_intervals=0),
-        # Refresh visible count more frequently
-        dcc.Interval(id="active-count-refresh", interval=5000, n_intervals=0),
+        # Heartbeat every 60s (session tracking — doesn't need to be fast)
+        dcc.Interval(id="heartbeat", interval=60000, n_intervals=0),
+        # Online counter — refresh every 60s (cosmetic, no need to be real-time)
+        dcc.Interval(id="active-count-refresh", interval=60000, n_intervals=0),
         dbc.Container(
             [
                 dbc.Row(
@@ -4861,18 +4853,9 @@ def build_detailed_hero_selectors(
         return dbc.Alert(tr("no_data_loaded", lang), color="danger")
 
     # Zeitrahmen filtern
-    temp = df.copy()
-    if season and "Season" in temp.columns:
-        temp = temp[temp["Season"] == season]
-    else:
-        if year is not None and "Jahr" in temp.columns:
-            temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None and "Monat" in temp.columns:
-            temp = temp[temp["Monat"] == month]
-
-    cols = []
-    for p in selected_players:
-        role = role_by_player.get(p)
+    temp = df.copy()  # copy needed: apply_map_filter then mutate Season/Jahr columns
+    if maps_selected:
+        temp = temp[temp["Map"].isin(maps_selected)]
         hero_col = f"{p} Hero"
         role_col = f"{p} Rolle"
         options = []
@@ -4943,7 +4926,7 @@ def on_view_last_active_day(n):
         raise PreventUpdate
     if df.empty or "Datum" not in df.columns:
         raise PreventUpdate
-    dff = df.dropna(subset=["Datum"]).copy()
+    dff = df.dropna(subset=["Datum"])
     if dff.empty:
         raise PreventUpdate
     last = dff["Datum"].max()
@@ -5261,13 +5244,11 @@ def on_timeline_tile_click(clicks, ids):
 
     # Ensure the target card exists within the current loaded count; if not, bump count to include it.
     # We assume history shows latest first (df sorted by Match ID desc); determine index of target.
+    # Avoid full df copy — df is already sorted by Match ID desc
     try:
-        tmp = df.copy()
-        if "Match ID" in tmp.columns:
-            tmp["Match ID"] = pd.to_numeric(tmp["Match ID"], errors="coerce")
-            tmp = tmp.sort_values("Match ID", ascending=False).reset_index(drop=True)
-            pos = tmp.index[tmp["Match ID"] == target_mid]
-            needed = int(pos[0]) + 1 if len(pos) else 10
+        if "Match ID" in df.columns:
+            ids = pd.to_numeric(df["Match ID"], errors="coerce")
+            needed = int((ids > target_mid).sum()) + 1
         else:
             needed = 50
     except Exception:
@@ -5393,8 +5374,8 @@ def compute_role_stats(
     if df.empty:
         return dbc.Alert(tr("no_data_loaded", lang), color="danger")
 
-    # Apply timeframe filters
-    temp = df.copy()
+    # Apply timeframe filters — start from df directly, each filter creates a new slice
+    temp = df
     # Apply map filter
     if maps_selected:
         temp = temp[temp["Map"].isin(maps_selected)]
@@ -5638,7 +5619,7 @@ def show_role_assignment_history(
     if df.empty:
         return dbc.Alert(tr("no_data_loaded", lang), color="danger")
 
-    temp = df.copy()
+    temp = df
     if maps_selected:
         temp = temp[temp["Map"].isin(maps_selected)]
         if temp.empty:

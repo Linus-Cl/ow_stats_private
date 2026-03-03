@@ -1323,7 +1323,7 @@
                             }
                             lastToken = d.token;
                         } catch (e) { }
-                    }, 3000);
+                    }, 10000);  // 10s polling – change-token is in-memory so this is cheap
                 }
             }
 
