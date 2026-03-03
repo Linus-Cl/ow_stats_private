@@ -4466,6 +4466,29 @@ def calculate_winrate(data, group_col):
     return grouped.reset_index().sort_values("Winrate", ascending=False)
 
 
+def season_sort_key(s) -> int:
+    """Extract numeric season number for sorting, e.g. 'Season 19' → 19."""
+    try:
+        return int(str(s).lower().replace("season", "").strip())
+    except Exception:
+        return 0
+
+
+def format_season_display(s) -> str:
+    """Format season value for display labels, e.g. 'Season 19' → 'Season 19'."""
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return "Unknown Season"
+    s = str(s).strip()
+    low = s.lower()
+    if low.startswith("season"):
+        return s  # already correct format
+    # bare number → prefix
+    try:
+        return f"Season {int(float(s))}"
+    except Exception:
+        return s
+
+
 def generate_history_layout_simple(games_df, lang: str = "en"):
     if games_df.empty:
         return [dbc.Alert("Keine Match History verfügbar.", color="info")]
