@@ -78,6 +78,11 @@ MATCHES_COLLECTION = "matches"
 CONFIG_COLLECTION = "config"
 CONFIG_DOC = "global"
 
+# In-memory cache for config (season etc.) — avoids 1 Firestore read per /api/mappings call
+_config_cache: dict = {}
+_config_cache_ts: float = 0.0
+_CONFIG_CACHE_TTL = 300  # seconds (5 min)
+
 # --- SSE token for real-time updates ---
 _last_change_token = str(int(time.time() * 1000))
 
@@ -221,25 +226,36 @@ def get_next_match_id() -> int:
 
 
 def get_config() -> dict:
-    """Get the global config document."""
+    """Get the global config document. Cached in memory for _CONFIG_CACHE_TTL seconds."""
+    global _config_cache, _config_cache_ts
+    now = time.time()
+    if _config_cache and (now - _config_cache_ts) < _CONFIG_CACHE_TTL:
+        return _config_cache
     if not is_available():
-        return {}
+        return _config_cache or {}
     try:
         doc = _firestore_db.collection(CONFIG_COLLECTION).document(CONFIG_DOC).get()
-        return doc.to_dict() if doc.exists else {}
+        result = doc.to_dict() if doc.exists else {}
+        _config_cache = result
+        _config_cache_ts = now
+        return result
     except Exception as e:
         print(f"[Firebase] get_config failed: {e}")
-        return {}
+        return _config_cache or {}  # stale cache on error
 
 
 def set_config(data: dict) -> bool:
-    """Update global config (merge)."""
+    """Update global config (merge). Invalidates cache."""
+    global _config_cache, _config_cache_ts
     if not is_available():
         return False
     try:
         _firestore_db.collection(CONFIG_COLLECTION).document(CONFIG_DOC).set(
             data, merge=True
         )
+        # Invalidate config cache so next read gets fresh data
+        _config_cache = {}
+        _config_cache_ts = 0.0
         print(f"[Firebase] Config updated: {list(data.keys())}")
         return True
     except Exception as e:

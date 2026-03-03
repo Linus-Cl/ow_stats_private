@@ -3658,8 +3658,8 @@ def api_create_match():
 
     doc_id = firebase_service.save_match(data)
     if doc_id:
-        # Reload in background – response returns instantly, plots update shortly after
-        threading.Thread(target=_reload_merged_data, daemon=True).start()
+        # Update in-memory df directly — 0 Firestore reads (data is already here)
+        _patch_df_with_match(data)
         return (
             json.dumps({"ok": True, "doc_id": doc_id}),
             201,
@@ -3690,7 +3690,7 @@ def api_update_match(match_id):
     data["match_id"] = match_id
     ok = firebase_service.update_match(match_id, data)
     if ok:
-        threading.Thread(target=_reload_merged_data, daemon=True).start()
+        _patch_df_with_match(data)  # 0 Firestore reads
         return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
     return (
         json.dumps({"ok": False, "error": "update failed"}),
@@ -3708,7 +3708,7 @@ def api_delete_match(match_id):
 
     ok = firebase_service.delete_match(match_id)
     if ok:
-        threading.Thread(target=_reload_merged_data, daemon=True).start()
+        _remove_df_row(match_id)  # 0 Firestore reads
         return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
     return (
         json.dumps({"ok": False, "error": "delete failed"}),
@@ -3866,6 +3866,39 @@ def _reload_merged_data():
         _set_app_state("data_token", str(int(time.time() * 1000)))
     except Exception:
         pass
+
+
+def _patch_df_with_match(match_data: dict):
+    """Update in-memory df after a save/update — zero Firestore reads.
+    Converts the already-known match_data dict directly to a DataFrame row.
+    """
+    global df
+    try:
+        new_row = _firestore_matches_to_df([match_data])
+        if new_row.empty:
+            return
+        match_id = match_data.get("match_id")
+        # Remove existing row with same ID (for updates)
+        if match_id is not None and not df.empty and "Match ID" in df.columns:
+            df = df[df["Match ID"] != int(match_id)].copy()
+        df = pd.concat([new_row, df], ignore_index=True)
+        if "Match ID" in df.columns:
+            df.sort_values("Match ID", ascending=False, inplace=True)
+            df.reset_index(drop=True, inplace=True)
+        _set_app_state("data_token", str(int(time.time() * 1000)))
+    except Exception as e:
+        print(f"[Data] _patch_df_with_match failed: {e}")
+
+
+def _remove_df_row(match_id: int):
+    """Remove a row from in-memory df — zero Firestore reads."""
+    global df
+    try:
+        if not df.empty and "Match ID" in df.columns:
+            df = df[df["Match ID"] != match_id].reset_index(drop=True)
+        _set_app_state("data_token", str(int(time.time() * 1000)))
+    except Exception as e:
+        print(f"[Data] _remove_df_row failed: {e}")
 
 
 # --- Input Page (served as static HTML) ---
