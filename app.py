@@ -132,9 +132,8 @@ def render_daily_report(active_tab, lang_data, selected_date):
     if df.empty or "Datum" not in df.columns:
         return html.Div(tr("no_data", lang)), []
 
-    # Filter to target day (today by default, or selected date if provided; else auto-fallback to last active)
-    dff = df.copy()
-    dff["Datum"] = pd.to_datetime(dff["Datum"], errors="coerce")
+    # df["Datum"] is already datetime (set in load_data) – no full copy needed
+    dff = df
     # Allow test override of 'today' via env var FAKE_TODAY=YYYY-MM-DD
     _fake = os.environ.get("FAKE_TODAY")
     if _fake:
@@ -1729,6 +1728,19 @@ def load_data(use_local=True):
             if str(col).endswith(" Rolle"):
                 df[col] = df[col].astype(str).str.strip()
                 df[col] = df[col].replace(role_map)
+
+        # Convert repetitive string columns to categoricals (saves ~60-70% memory)
+        # E.g. "Map" has only 31 unique values but 5580 rows – categorical stores
+        # each string once and uses an int8 index per row instead of 50-byte objects.
+        _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
+        for _p in getattr(constants, "players", []):
+            _cat_cols += [f"{_p} Hero", f"{_p} Rolle"]
+        for _col in _cat_cols:
+            if _col in df.columns:
+                try:
+                    df[_col] = df[_col].astype("category")
+                except Exception:
+                    pass
 
 
 load_data(use_local=True)
@@ -3908,6 +3920,16 @@ def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
         result["Match ID"] = pd.to_numeric(result["Match ID"], errors="coerce")
         result.sort_values("Match ID", ascending=False, inplace=True)
         result.reset_index(drop=True, inplace=True)
+    # Use categoricals for repetitive string columns (same as load_data)
+    _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
+    for _p in getattr(constants, "players", []):
+        _cat_cols += [f"{_p} Hero", f"{_p} Rolle"]
+    for _col in _cat_cols:
+        if _col in result.columns:
+            try:
+                result[_col] = result[_col].astype("category")
+            except Exception:
+                pass
     return result
 
 
@@ -5165,7 +5187,8 @@ def update_history_display(
     else:  # triggered by "load-more-history-button"
         new_count = current_store.get("count", 10) + load_amount
 
-    filtered_df = df.copy()
+    # Avoid copying all 5580 rows – filter directly on the global df (read-only)
+    filtered_df = df
 
     # Filter by player
     if player_name and player_name != "ALL":
