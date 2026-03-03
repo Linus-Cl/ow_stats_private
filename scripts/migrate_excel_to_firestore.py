@@ -30,14 +30,19 @@ BATCH_SIZE = 400  # Firestore max 500 ops/batch; 400 als Puffer
 
 
 def normalize_str(val) -> str:
-    if val is None or (isinstance(val, float) and str(val) == 'nan'):
+    if val is None or (isinstance(val, float) and str(val) == "nan"):
         return ""
     return str(val).strip()
 
 
 def normalize_player_role(role: str) -> str:
     """Normalisiert Rollenwerte aus alten Excel-Daten."""
-    mapping = {"DPS": "Damage", "Damage": "Damage", "Tank": "Tank", "Support": "Support"}
+    mapping = {
+        "DPS": "Damage",
+        "Damage": "Damage",
+        "Tank": "Tank",
+        "Support": "Support",
+    }
     return mapping.get(role.strip(), role.strip()) if role.strip() else ""
 
 
@@ -62,7 +67,11 @@ def row_to_match(row: dict, players: list) -> dict:
     if datum_raw:
         try:
             if isinstance(datum_raw, (datetime, date)):
-                date_str = datum_raw.strftime("%Y-%m-%d") if hasattr(datum_raw, 'strftime') else str(datum_raw)[:10]
+                date_str = (
+                    datum_raw.strftime("%Y-%m-%d")
+                    if hasattr(datum_raw, "strftime")
+                    else str(datum_raw)[:10]
+                )
             else:
                 parsed = pd.to_datetime(str(datum_raw), errors="coerce")
                 if not pd.isna(parsed):
@@ -118,13 +127,16 @@ def migrate():
 
     try:
         from firebase_admin import firestore as _fs
+
         db = firebase_service._firestore_db
     except Exception as e:
         print(f"❌ Firestore-Verbindung fehlgeschlagen: {e}")
         sys.exit(1)
 
     # ---- Excel lesen ----
-    excel_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local.xlsx")
+    excel_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local.xlsx"
+    )
     if not os.path.exists(excel_path):
         print(f"❌ local.xlsx nicht gefunden unter: {excel_path}")
         sys.exit(1)
@@ -135,6 +147,7 @@ def migrate():
     print(f"   {len(df)} Zeilen geladen, Spalten: {list(df.columns[:8])}...")
 
     import constants
+
     players = constants.players
 
     # ---- Konvertieren ----
@@ -148,7 +161,9 @@ def migrate():
             continue
         matches.append(m)
 
-    print(f"   ✅ {len(matches)} Matches konvertiert, {skipped} übersprungen (fehlende ID)")
+    print(
+        f"   ✅ {len(matches)} Matches konvertiert, {skipped} übersprungen (fehlende ID)"
+    )
 
     # ---- Schon vorhandene IDs prüfen (optional, für Info) ----
     print("🔍 Prüfe bereits vorhandene Matches in Firestore...")
@@ -164,7 +179,9 @@ def migrate():
 
     new_matches = [m for m in matches if m["match_id"] not in existing]
     update_matches = [m for m in matches if m["match_id"] in existing]
-    print(f"   → {len(new_matches)} neue, {len(update_matches)} bereits vorhanden (werden überschrieben)")
+    print(
+        f"   → {len(new_matches)} neue, {len(update_matches)} bereits vorhanden (werden überschrieben)"
+    )
 
     if not matches:
         print("✅ Nichts zu migrieren.")
@@ -175,28 +192,38 @@ def migrate():
     uploaded = 0
     errors = 0
 
-    print(f"\n📤 Lade {total} Matches in {((total - 1) // BATCH_SIZE) + 1} Batches hoch...")
+    print(
+        f"\n📤 Lade {total} Matches in {((total - 1) // BATCH_SIZE) + 1} Batches hoch..."
+    )
     for i in range(0, total, BATCH_SIZE):
-        batch_matches = matches[i: i + BATCH_SIZE]
+        batch_matches = matches[i : i + BATCH_SIZE]
         batch = db.batch()
         for m in batch_matches:
-            ref = db.collection(firebase_service.MATCHES_COLLECTION).document(str(m["match_id"]))
+            ref = db.collection(firebase_service.MATCHES_COLLECTION).document(
+                str(m["match_id"])
+            )
             batch.set(ref, m)
         try:
             batch.commit()
             uploaded += len(batch_matches)
             pct = int(uploaded / total * 100)
-            print(f"   [{pct:3d}%] {uploaded}/{total} hochgeladen (Batch {i // BATCH_SIZE + 1})")
+            print(
+                f"   [{pct:3d}%] {uploaded}/{total} hochgeladen (Batch {i // BATCH_SIZE + 1})"
+            )
         except Exception as e:
             errors += len(batch_matches)
             print(f"   ❌ Batch-Fehler: {e}")
 
-    print(f"\n{'✅' if errors == 0 else '⚠️ '} Migration abgeschlossen: {uploaded} hochgeladen, {errors} Fehler")
+    print(
+        f"\n{'✅' if errors == 0 else '⚠️ '} Migration abgeschlossen: {uploaded} hochgeladen, {errors} Fehler"
+    )
 
     if errors == 0:
         print("\n🎯 Nächster Schritt:")
         print("   Die App nutzt nun automatisch nur noch Firestore als Datenquelle.")
-        print("   Excel bleibt als Notfall-Fallback erhalten, wird aber nicht mehr angezeigt.")
+        print(
+            "   Excel bleibt als Notfall-Fallback erhalten, wird aber nicht mehr angezeigt."
+        )
 
 
 if __name__ == "__main__":

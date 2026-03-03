@@ -138,9 +138,8 @@ def get_all_matches(limit: int = 0) -> list[dict]:
     if not is_available():
         return []
     try:
-        query = (
-            _firestore_db.collection(MATCHES_COLLECTION)
-            .order_by("match_id", direction=firestore.Query.DESCENDING)
+        query = _firestore_db.collection(MATCHES_COLLECTION).order_by(
+            "match_id", direction=firestore.Query.DESCENDING
         )
         if limit > 0:
             query = query.limit(limit)

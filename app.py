@@ -1888,6 +1888,7 @@ def _self_ping_loop():
     RENDER_EXTERNAL_URL is set automatically by Render.
     """
     import urllib.request
+
     url = os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL")
     if not url:
         return  # local dev – don't ping
@@ -3935,7 +3936,7 @@ def _remove_df_row(match_id: int):
 @server.route("/health")
 def health_check():
     """Lightweight liveness probe – no DB reads."""
-    return ("{\"ok\":true}", 200, {"Content-Type": "application/json"})
+    return ('{"ok":true}', 200, {"Content-Type": "application/json"})
 
 
 @server.route("/input")
