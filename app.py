@@ -2126,7 +2126,7 @@ app.layout = html.Div(
                                 color="success",
                                 className="mt-4",
                                 href="/input",
-                                external_link=False,
+                                external_link=True,
                             ),
                             width="auto",
                         ),
