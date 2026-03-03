@@ -2052,9 +2052,12 @@ app.layout = html.Div(
                         ),
                         dbc.Col(
                             dbc.Button(
+                                "⊕ Match eingeben",
                                 id="update-data-button",
-                                color="primary",
+                                color="success",
                                 className="mt-4",
+                                href="/input",
+                                external_link=False,
                             ),
                             width="auto",
                         ),
@@ -3630,12 +3633,10 @@ def api_get_matches():
         return auth_err
 
     limit = int(request.args.get("limit", 30))
+    # Pass limit directly to Firestore – avoids loading all 5000+ docs just for 20 rows
     matches = (
-        firebase_service.get_all_matches() if firebase_service.is_available() else []
+        firebase_service.get_all_matches(limit=limit) if firebase_service.is_available() else []
     )
-
-    # Trim to limit
-    matches = matches[:limit]
 
     return (json.dumps(matches, default=str), 200, {"Content-Type": "application/json"})
 
@@ -3657,8 +3658,8 @@ def api_create_match():
 
     doc_id = firebase_service.save_match(data)
     if doc_id:
-        # Also reload data in the main app to keep plots up to date
-        _reload_merged_data()
+        # Reload in background – response returns instantly, plots update shortly after
+        threading.Thread(target=_reload_merged_data, daemon=True).start()
         return (
             json.dumps({"ok": True, "doc_id": doc_id}),
             201,
@@ -3689,7 +3690,7 @@ def api_update_match(match_id):
     data["match_id"] = match_id
     ok = firebase_service.update_match(match_id, data)
     if ok:
-        _reload_merged_data()
+        threading.Thread(target=_reload_merged_data, daemon=True).start()
         return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
     return (
         json.dumps({"ok": False, "error": "update failed"}),
@@ -3707,7 +3708,7 @@ def api_delete_match(match_id):
 
     ok = firebase_service.delete_match(match_id)
     if ok:
-        _reload_merged_data()
+        threading.Thread(target=_reload_merged_data, daemon=True).start()
         return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
     return (
         json.dumps({"ok": False, "error": "delete failed"}),
@@ -4022,8 +4023,8 @@ def apply_language_texts(lang_data):
 def apply_language_controls(lang_data):
     lang = (lang_data or {}).get("lang", "en")
     if lang == "de":
-        return "Daten aus Cloud aktualisieren", "Dark Mode"
-    return "Update Data from Cloud", "Dark Mode"
+        return "⊕ Match eingeben", "Dark Mode"
+    return "⊕ Add Match", "Dark Mode"
 
 
 @app.callback(
@@ -4754,33 +4755,13 @@ def build_detailed_hero_selectors(
 
 @app.callback(
     Output("dummy-output", "children"),
-    Input("update-data-button", "n_clicks"),
     Input("auto-update-tick", "n_intervals"),
     prevent_initial_call=True,
 )
-def update_data(n_clicks, n_intervals):
-    triggered = ctx.triggered_id if ctx.triggered_id else None
-    if triggered == "update-data-button" and (n_clicks or 0) > 0:
-        updated = _fetch_update_from_cloud(force=True)
-        if updated:
-            # Persist a server-wide token so all workers/sessions can detect the change
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-            return f"Data updated at {pd.Timestamp.now()}"
-        return no_update
-    if triggered == "auto-update-tick":
-        updated = _fetch_update_from_cloud(force=False)
-        if updated:
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-            return f"Data updated at {pd.Timestamp.now()}"
-        return no_update
+def update_data(n_intervals):
+    # Data is now managed exclusively via Firestore.
+    # The /api/matches endpoints trigger background reloads automatically.
+    # This ticker is kept for future use but performs no operation.
     return no_update
 
 

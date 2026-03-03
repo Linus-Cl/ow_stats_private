@@ -126,18 +126,21 @@ def save_match(match_data: dict) -> Optional[str]:
         return None
 
 
-def get_all_matches() -> list[dict]:
-    """Fetch all matches from Firestore, sorted by match_id descending."""
+def get_all_matches(limit: int = 0) -> list[dict]:
+    """Fetch matches from Firestore, sorted by match_id descending.
+    If limit > 0, only fetches that many documents (Firestore-level, very fast).
+    """
     if not is_available():
         return []
     try:
-        docs = (
+        query = (
             _firestore_db.collection(MATCHES_COLLECTION)
             .order_by("match_id", direction=firestore.Query.DESCENDING)
-            .stream()
         )
+        if limit > 0:
+            query = query.limit(limit)
         results = []
-        for doc in docs:
+        for doc in query.stream():
             d = doc.to_dict()
             d["_doc_id"] = doc.id
             results.append(d)
