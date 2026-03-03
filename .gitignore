@@ -19,6 +19,9 @@ __pycache__/
 
 # Local prompts and automation (do not track)
 
+# Firebase credentials (NEVER commit)
+firebase-credentials.json
+
 # Legacy/untracked helper files (ignore if they reappear locally)
 assets_utils.py
 branding.py

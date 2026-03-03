@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Match Input – OW Stats</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d26;
+            --surface2: #252830;
+            --border: #333640;
+            --text: #e2e5ea;
+            --text2: #9ca0a8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --green: #22c55e;
+            --red: #ef4444;
+            --orange: #f59e0b;
+            --radius: 6px;
+            --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            font-family: var(--font);
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh
+        }
+
+        /* --- PIN Overlay --- */
+        #pin-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999
+        }
+
+        #pin-overlay.hidden {
+            display: none
+        }
+
+        .pin-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 32px;
+            text-align: center;
+            width: 320px
+        }
+
+        .pin-box h2 {
+            margin-bottom: 16px;
+            font-size: 18px
+        }
+
+        .pin-box input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 18px;
+            text-align: center;
+            letter-spacing: 8px;
+            outline: none
+        }
+
+        .pin-box input:focus {
+            border-color: var(--accent)
+        }
+
+        .pin-box .err {
+            color: var(--red);
+            font-size: 13px;
+            margin-top: 8px;
+            min-height: 20px
+        }
+
+        /* --- Layout --- */
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 16px 14px
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 18px
+        }
+
+        header h1 {
+            font-size: 20px;
+            font-weight: 600
+        }
+
+        header .links {
+            display: flex;
+            gap: 10px;
+            font-size: 13px
+        }
+
+        header .links a {
+            color: var(--accent);
+            text-decoration: none
+        }
+
+        header .links a:hover {
+            text-decoration: underline
+        }
+
+        /* --- Player Toggles --- */
+        .player-toggles {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap
+        }
+
+        .ptoggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            cursor: pointer;
+            user-select: none;
+            transition: .15s
+        }
+
+        .ptoggle.active {
+            border-color: var(--green);
+            background: rgba(34, 197, 94, .12)
+        }
+
+        .ptoggle .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--border);
+            transition: .15s
+        }
+
+        .ptoggle.active .dot {
+            background: var(--green)
+        }
+
+        .ptoggle .name {
+            font-size: 14px
+        }
+
+        /* --- Form --- */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 14px
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 3px
+        }
+
+        .form-group label {
+            font-size: 11px;
+            color: var(--text2);
+            text-transform: uppercase;
+            letter-spacing: .5px
+        }
+
+        .form-group input,
+        .form-group select {
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: .15s
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            border-color: var(--accent)
+        }
+
+        /* --- Searchable Dropdown --- */
+        .dropdown-wrap {
+            position: relative
+        }
+
+        .dropdown-wrap input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 14px;
+            outline: none
+        }
+
+        .dropdown-wrap input:focus {
+            border-color: var(--accent)
+        }
+
+        .dropdown-list {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 200px;
+            overflow-y: auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            z-index: 100;
+            display: none
+        }
+
+        .dropdown-list.open {
+            display: block
+        }
+
+        .dropdown-item {
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: .1s
+        }
+
+        .dropdown-item:hover,
+        .dropdown-item.highlighted {
+            background: var(--accent);
+            color: #fff
+        }
+
+        .dropdown-item .role-tag {
+            font-size: 11px;
+            color: var(--text2);
+            margin-left: 6px
+        }
+
+        .dropdown-item:hover .role-tag,
+        .dropdown-item.highlighted .role-tag {
+            color: rgba(255, 255, 255, .7)
+        }
+
+        /* --- Result Buttons --- */
+        .result-group {
+            display: flex;
+            gap: 6px
+        }
+
+        .result-btn {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: .15s;
+            text-align: center
+        }
+
+        .result-btn:hover {
+            border-color: var(--accent)
+        }
+
+        .result-btn.selected-win {
+            border-color: var(--green);
+            background: rgba(34, 197, 94, .15);
+            color: var(--green)
+        }
+
+        .result-btn.selected-lose {
+            border-color: var(--red);
+            background: rgba(239, 68, 68, .15);
+            color: var(--red)
+        }
+
+        .result-btn.selected-draw {
+            border-color: var(--orange);
+            background: rgba(245, 158, 11, .15);
+            color: var(--orange)
+        }
+
+        /* --- Attack/Def Buttons --- */
+        .ad-group {
+            display: flex;
+            gap: 6px
+        }
+
+        .ad-btn {
+            flex: 1;
+            padding: 7px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: .15s;
+            text-align: center
+        }
+
+        .ad-btn:hover {
+            border-color: var(--accent)
+        }
+
+        .ad-btn.selected {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, .15);
+            color: var(--accent)
+        }
+
+        .ad-btn.auto {
+            opacity: .6;
+            cursor: default
+        }
+
+        /* --- Player Rows --- */
+        .player-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 14px
+        }
+
+        .player-row {
+            display: grid;
+            grid-template-columns: 90px 1fr 100px;
+            gap: 8px;
+            align-items: end
+        }
+
+        .player-row .pname {
+            font-size: 13px;
+            font-weight: 500;
+            padding: 8px 0;
+            color: var(--text2)
+        }
+
+        .player-row .auto-role {
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--text2);
+            font-size: 13px
+        }
+
+        /* --- Submit --- */
+        .submit-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 20px
+        }
+
+        .submit-btn {
+            padding: 10px 28px;
+            border: none;
+            border-radius: var(--radius);
+            background: var(--accent);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: .15s
+        }
+
+        .submit-btn:hover {
+            background: var(--accent-hover)
+        }
+
+        .submit-btn:disabled {
+            opacity: .5;
+            cursor: not-allowed
+        }
+
+        /* --- Toast --- */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 10000;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: .3s;
+            pointer-events: none
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0)
+        }
+
+        .toast.success {
+            background: var(--green);
+            color: #fff
+        }
+
+        .toast.error {
+            background: var(--red);
+            color: #fff
+        }
+
+        /* --- History Table --- */
+        .history-section {
+            margin-top: 24px;
+            border-top: 1px solid var(--border);
+            padding-top: 16px
+        }
+
+        .history-section h2 {
+            font-size: 16px;
+            margin-bottom: 10px
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px
+        }
+
+        .history-table th {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text2);
+            font-size: 11px;
+            text-transform: uppercase
+        }
+
+        .history-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--border)
+        }
+
+        .history-table tr:hover {
+            background: var(--surface2)
+        }
+
+        .history-table .win {
+            color: var(--green)
+        }
+
+        .history-table .lose {
+            color: var(--red)
+        }
+
+        .history-table .draw {
+            color: var(--orange)
+        }
+
+        .btn-sm {
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: .15s
+        }
+
+        .btn-sm:hover {
+            border-color: var(--accent);
+            color: var(--accent)
+        }
+
+        .btn-sm.danger:hover {
+            border-color: var(--red);
+            color: var(--red)
+        }
+
+        /* --- Season Config (bottom-right) --- */
+        .season-config {
+            position: fixed;
+            bottom: 14px;
+            right: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text2)
+        }
+
+        .season-config select {
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface2);
+            color: var(--text);
+            font-size: 12px;
+            outline: none
+        }
+
+        /* --- Confirm Dialog --- */
+        .confirm-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9998
+        }
+
+        .confirm-overlay.hidden {
+            display: none
+        }
+
+        .confirm-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            text-align: center;
+            width: 340px
+        }
+
+        .confirm-box p {
+            margin-bottom: 16px;
+            font-size: 14px
+        }
+
+        .confirm-box .btns {
+            display: flex;
+            gap: 8px;
+            justify-content: center
+        }
+
+        .confirm-box .btns button {
+            padding: 8px 20px;
+            border-radius: var(--radius);
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface2);
+            color: var(--text);
+            transition: .15s
+        }
+
+        .confirm-box .btns .yes {
+            background: var(--red);
+            border-color: var(--red);
+            color: #fff
+        }
+    </style>
+</head>
+
+<body>
+    <!-- PIN Overlay -->
+    <div id="pin-overlay">
+        <div class="pin-box">
+            <h2>🔒 PIN eingeben</h2>
+            <input type="password" id="pin-input" maxlength="10" placeholder="••••" autofocus>
+            <div class="err" id="pin-err"></div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div id="confirm-overlay" class="confirm-overlay hidden">
+        <div class="confirm-box">
+            <p id="confirm-text">Match löschen?</p>
+            <div class="btns">
+                <button class="yes" id="confirm-yes">Löschen</button>
+                <button id="confirm-no">Abbrechen</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <div class="container">
+        <header>
+            <h1>⚡ Match Input</h1>
+            <div class="links">
+                <a href="/">← Dashboard</a>
+                <a href="#" id="export-btn" title="Excel Export">📥 Export</a>
+            </div>
+        </header>
+
+        <!-- Player Toggles -->
+        <div class="player-toggles" id="player-toggles"></div>
+
+        <!-- Form -->
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Datum</label>
+                <input type="date" id="f-date" tabindex="1">
+            </div>
+            <div class="form-group">
+                <label>Uhrzeit</label>
+                <input type="time" id="f-time" tabindex="2">
+            </div>
+            <div class="form-group">
+                <label>Match ID</label>
+                <input type="number" id="f-matchid" tabindex="3">
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Map</label>
+                <div class="dropdown-wrap" id="map-dd">
+                    <input type="text" id="f-map" autocomplete="off" placeholder="Map suchen..." tabindex="4">
+                    <div class="dropdown-list" id="map-list"></div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Gamemode</label>
+                <input type="text" id="f-gamemode" readonly tabindex="-1" style="opacity:.6;cursor:default">
+            </div>
+            <div class="form-group">
+                <label>Ergebnis</label>
+                <div class="result-group" id="result-group">
+                    <button class="result-btn" data-val="Win" tabindex="5">Win</button>
+                    <button class="result-btn" data-val="Lose" tabindex="6">Lose</button>
+                    <button class="result-btn" data-val="Draw" tabindex="7">Draw</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-grid" style="grid-template-columns:1fr">
+            <div class="form-group">
+                <label>Attack / Defense</label>
+                <div class="ad-group" id="ad-group">
+                    <button class="ad-btn" data-val="Attack">Attack</button>
+                    <button class="ad-btn" data-val="Defense">Defense</button>
+                    <button class="ad-btn" data-val="Attack Attack">Attack Attack</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Player Hero Inputs -->
+        <div class="player-inputs" id="player-inputs"></div>
+
+        <!-- Submit -->
+        <div class="submit-row">
+            <button class="submit-btn" id="submit-btn">Match speichern</button>
+            <span id="submit-status" style="font-size:13px;color:var(--text2)"></span>
+        </div>
+
+        <!-- History -->
+        <div class="history-section">
+            <h2>Letzte Matches</h2>
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Datum</th>
+                        <th>Map</th>
+                        <th>Ergebnis</th>
+                        <th>Spieler</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="history-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Season Config -->
+    <div class="season-config">
+        <span>Season:</span>
+        <select id="season-select"></select>
+    </div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            // ============================================================
+            // State
+            // ============================================================
+            let PIN = '';
+            let mappings = null;
+            let activePlayers = {};  // {name: bool}
+            let selectedResult = '';
+            let selectedAD = '';
+            let editingMatchId = null;  // null = new, number = editing
+            let heroTabIndex = 10;
+
+            // ============================================================
+            // PIN
+            // ============================================================
+            const pinOverlay = document.getElementById('pin-overlay');
+            const pinInput = document.getElementById('pin-input');
+            const pinErr = document.getElementById('pin-err');
+
+            // Check sessionStorage
+            const savedPin = sessionStorage.getItem('ow_pin');
+            if (savedPin) {
+                PIN = savedPin;
+                pinOverlay.classList.add('hidden');
+                init();
+            }
+
+            pinInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    const val = pinInput.value.trim();
+                    if (!val) return;
+                    PIN = val;
+                    // Verify by calling mappings endpoint
+                    fetch('/api/mappings', { headers: { 'X-Input-Pin': PIN } })
+                        .then(r => {
+                            if (r.ok) {
+                                sessionStorage.setItem('ow_pin', PIN);
+                                pinOverlay.classList.add('hidden');
+                                init();
+                            } else {
+                                pinErr.textContent = 'Falscher PIN';
+                                pinInput.value = '';
+                                pinInput.focus();
+                            }
+                        });
+                }
+            });
+
+            // ============================================================
+            // Init
+            // ============================================================
+            async function init() {
+                try {
+                    const r = await fetch('/api/mappings');
+                    mappings = await r.json();
+                } catch (e) {
+                    showToast('Mappings konnten nicht geladen werden', 'error');
+                    return;
+                }
+                setupPlayerToggles();
+                setupSeasonConfig();
+                setupMapDropdown();
+                setupResultButtons();
+                setupADButtons();
+                resetForm();
+                buildPlayerRows();
+                loadHistory();
+                setupExport();
+                setupSSE();
+                setupKeyboardNav();
+            }
+
+            // ============================================================
+            // Player Toggles
+            // ============================================================
+            function setupPlayerToggles() {
+                const container = document.getElementById('player-toggles');
+                const saved = JSON.parse(localStorage.getItem('ow_active_players') || '{}');
+                mappings.players.forEach(name => {
+                    // Default: first 3 active
+                    if (saved[name] === undefined) {
+                        saved[name] = mappings.players.indexOf(name) < 3;
+                    }
+                    activePlayers[name] = saved[name];
+
+                    const el = document.createElement('div');
+                    el.className = 'ptoggle' + (activePlayers[name] ? ' active' : '');
+                    el.innerHTML = `<div class="dot"></div><span class="name">${name}</span>`;
+                    el.addEventListener('click', () => {
+                        activePlayers[name] = !activePlayers[name];
+                        el.classList.toggle('active');
+                        localStorage.setItem('ow_active_players', JSON.stringify(activePlayers));
+                        buildPlayerRows();
+                    });
+                    container.appendChild(el);
+                });
+                localStorage.setItem('ow_active_players', JSON.stringify(activePlayers));
+            }
+
+            // ============================================================
+            // Season Config
+            // ============================================================
+            function setupSeasonConfig() {
+                const sel = document.getElementById('season-select');
+                (mappings.allSeasons || []).forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s; opt.textContent = s;
+                    sel.appendChild(opt);
+                });
+                sel.value = mappings.currentSeason || 'Season 19';
+                sel.addEventListener('change', () => {
+                    fetch('/api/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Input-Pin': PIN },
+                        body: JSON.stringify({ current_season: sel.value })
+                    });
+                    mappings.currentSeason = sel.value;
+                });
+            }
+
+            // ============================================================
+            // Map Dropdown (fuzzy search)
+            // ============================================================
+            function setupMapDropdown() {
+                const input = document.getElementById('f-map');
+                const list = document.getElementById('map-list');
+                let items = [];
+                let highlighted = -1;
+
+                function render(filter = '') {
+                    list.innerHTML = '';
+                    const f = filter.toLowerCase();
+                    items = (mappings.allMaps || []).filter(m => m.toLowerCase().includes(f));
+                    highlighted = items.length > 0 ? 0 : -1;
+                    items.forEach((m, i) => {
+                        const gm = mappings.mapGamemodeMap[m] || '';
+                        const el = document.createElement('div');
+                        el.className = 'dropdown-item' + (i === 0 ? ' highlighted' : '');
+                        el.innerHTML = `${m} <span class="role-tag">${gm}</span>`;
+                        el.addEventListener('mousedown', (e) => { e.preventDefault(); selectMap(m); });
+                        list.appendChild(el);
+                    });
+                }
+
+                function selectMap(m) {
+                    input.value = m;
+                    list.classList.remove('open');
+                    const gm = mappings.mapGamemodeMap[m] || '';
+                    document.getElementById('f-gamemode').value = gm;
+                    // Auto-set attack/def
+                    const ad = mappings.gamemodeAttackDef[gm];
+                    if (ad !== undefined && ad !== null) {
+                        setAD(ad, true);
+                    } else {
+                        setAD('', false);
+                    }
+                    // Move focus to result
+                    document.querySelector('#result-group .result-btn')?.focus();
+                }
+
+                input.addEventListener('input', () => { render(input.value); list.classList.add('open'); });
+                input.addEventListener('focus', () => { render(input.value); list.classList.add('open'); });
+                input.addEventListener('blur', () => { setTimeout(() => list.classList.remove('open'), 150); });
+                input.addEventListener('keydown', (e) => {
+                    if (!list.classList.contains('open') && e.key !== 'Tab') {
+                        render(input.value); list.classList.add('open');
+                    }
+                    const els = list.querySelectorAll('.dropdown-item');
+                    if (e.key === 'ArrowDown') { e.preventDefault(); highlighted = Math.min(highlighted + 1, items.length - 1); updateHL(els); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); highlighted = Math.max(highlighted - 1, 0); updateHL(els); }
+                    else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (highlighted >= 0 && items[highlighted]) selectMap(items[highlighted]);
+                    }
+                });
+
+                function updateHL(els) {
+                    els.forEach((el, i) => el.classList.toggle('highlighted', i === highlighted));
+                    if (els[highlighted]) els[highlighted].scrollIntoView({ block: 'nearest' });
+                }
+            }
+
+            // ============================================================
+            // Result Buttons
+            // ============================================================
+            function setupResultButtons() {
+                document.querySelectorAll('#result-group .result-btn').forEach(btn => {
+                    btn.addEventListener('click', () => setResult(btn.dataset.val));
+                    btn.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); setResult(btn.dataset.val); advanceFocus(btn); }
+                    });
+                });
+            }
+
+            function setResult(val) {
+                selectedResult = val;
+                document.querySelectorAll('#result-group .result-btn').forEach(b => {
+                    b.className = 'result-btn' + (b.dataset.val === val ? ` selected-${val.toLowerCase()}` : '');
+                });
+            }
+
+            // ============================================================
+            // Attack/Defense Buttons
+            // ============================================================
+            function setupADButtons() {
+                document.querySelectorAll('#ad-group .ad-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        if (btn.classList.contains('auto')) return;
+                        setAD(btn.dataset.val, false);
+                    });
+                });
+            }
+
+            function setAD(val, isAuto) {
+                selectedAD = val;
+                document.querySelectorAll('#ad-group .ad-btn').forEach(b => {
+                    b.classList.remove('selected', 'auto');
+                    if (b.dataset.val === val) {
+                        b.classList.add('selected');
+                        if (isAuto) b.classList.add('auto');
+                    }
+                });
+            }
+
+            // ============================================================
+            // Player Hero Rows
+            // ============================================================
+            function buildPlayerRows() {
+                const container = document.getElementById('player-inputs');
+                container.innerHTML = '';
+                heroTabIndex = 10;
+
+                mappings.players.forEach(name => {
+                    if (!activePlayers[name]) return;
+                    const row = document.createElement('div');
+                    row.className = 'player-row';
+                    row.dataset.player = name;
+
+                    const ti = heroTabIndex++;
+                    row.innerHTML = `
+        <div class="pname">${name}</div>
+        <div class="dropdown-wrap" data-player="${name}">
+          <input type="text" class="hero-input" data-player="${name}" autocomplete="off" placeholder="Hero..." tabindex="${ti}">
+          <div class="dropdown-list hero-list"></div>
+        </div>
+        <div class="auto-role" data-player="${name}">—</div>
+      `;
+                    container.appendChild(row);
+
+                    // Setup hero dropdown
+                    const inp = row.querySelector('.hero-input');
+                    const hlist = row.querySelector('.hero-list');
+                    let hitems = [];
+                    let hhl = -1;
+
+                    function hrender(filter = '') {
+                        hlist.innerHTML = '';
+                        const f = filter.toLowerCase();
+                        hitems = (mappings.allHeroes || []).filter(h => h.toLowerCase().includes(f));
+                        hhl = hitems.length > 0 ? 0 : -1;
+                        hitems.forEach((h, i) => {
+                            const role = mappings.heroRoleMap[h] || '';
+                            const el = document.createElement('div');
+                            el.className = 'dropdown-item' + (i === 0 ? ' highlighted' : '');
+                            el.innerHTML = `${h} <span class="role-tag">${role}</span>`;
+                            el.addEventListener('mousedown', (e) => { e.preventDefault(); selectHero(name, h, inp, hlist); });
+                            hlist.appendChild(el);
+                        });
+                    }
+
+                    function selectHero(player, hero, input, list) {
+                        input.value = hero;
+                        list.classList.remove('open');
+                        const role = mappings.heroRoleMap[hero] || '—';
+                        row.querySelector('.auto-role').textContent = role;
+                        // Advance to next hero input
+                        advanceFocus(input);
+                    }
+
+                    inp.addEventListener('input', () => { hrender(inp.value); hlist.classList.add('open'); });
+                    inp.addEventListener('focus', () => { hrender(inp.value); hlist.classList.add('open'); });
+                    inp.addEventListener('blur', () => { setTimeout(() => hlist.classList.remove('open'), 150); });
+                    inp.addEventListener('keydown', (e) => {
+                        if (!hlist.classList.contains('open') && e.key !== 'Tab') {
+                            hrender(inp.value); hlist.classList.add('open');
+                        }
+                        const els = hlist.querySelectorAll('.dropdown-item');
+                        if (e.key === 'ArrowDown') { e.preventDefault(); hhl = Math.min(hhl + 1, hitems.length - 1); hUpdateHL(els); }
+                        else if (e.key === 'ArrowUp') { e.preventDefault(); hhl = Math.max(hhl - 1, 0); hUpdateHL(els); }
+                        else if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (hhl >= 0 && hitems[hhl]) selectHero(name, hitems[hhl], inp, hlist);
+                        }
+                    });
+
+                    function hUpdateHL(els) {
+                        els.forEach((el, i) => el.classList.toggle('highlighted', i === hhl));
+                        if (els[hhl]) els[hhl].scrollIntoView({ block: 'nearest' });
+                    }
+                });
+            }
+
+            // ============================================================
+            // Keyboard Navigation
+            // ============================================================
+            function setupKeyboardNav() {
+                // Global Enter → advance focus (for non-dropdown inputs)
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && e.target.tagName === 'INPUT' && !e.target.closest('.dropdown-wrap')) {
+                        e.preventDefault();
+                        advanceFocus(e.target);
+                    }
+                });
+            }
+
+            function advanceFocus(current) {
+                const all = Array.from(document.querySelectorAll('[tabindex]'))
+                    .filter(el => {
+                        const ti = parseInt(el.getAttribute('tabindex'));
+                        return ti > 0 && !el.closest('.hidden') && el.offsetParent !== null;
+                    })
+                    .sort((a, b) => parseInt(a.getAttribute('tabindex')) - parseInt(b.getAttribute('tabindex')));
+
+                const curTi = parseInt(current.getAttribute('tabindex') || '0');
+                const next = all.find(el => parseInt(el.getAttribute('tabindex')) > curTi);
+                if (next) {
+                    next.focus();
+                } else {
+                    // Last field → focus submit
+                    document.getElementById('submit-btn').focus();
+                }
+            }
+
+            // ============================================================
+            // Reset Form
+            // ============================================================
+            function resetForm() {
+                const now = new Date();
+                document.getElementById('f-date').value = now.toISOString().slice(0, 10);
+                document.getElementById('f-time').value = now.toTimeString().slice(0, 5);
+                document.getElementById('f-matchid').value = mappings.nextMatchId || '';
+                document.getElementById('f-map').value = '';
+                document.getElementById('f-gamemode').value = '';
+                setResult('');
+                setAD('', false);
+                editingMatchId = null;
+                document.getElementById('submit-btn').textContent = 'Match speichern';
+                document.getElementById('submit-status').textContent = '';
+                // Reset hero inputs
+                document.querySelectorAll('.hero-input').forEach(inp => { inp.value = ''; });
+                document.querySelectorAll('.auto-role').forEach(el => { el.textContent = '—'; });
+                // Focus map
+                setTimeout(() => document.getElementById('f-map')?.focus(), 100);
+            }
+
+            // ============================================================
+            // Submit
+            // ============================================================
+            document.getElementById('submit-btn').addEventListener('click', submitMatch);
+
+            async function submitMatch() {
+                const matchId = parseInt(document.getElementById('f-matchid').value);
+                const date = document.getElementById('f-date').value;
+                const time = document.getElementById('f-time').value;
+                const map = document.getElementById('f-map').value.trim();
+                const gamemode = document.getElementById('f-gamemode').value.trim();
+
+                if (!map || !selectedResult) {
+                    showToast('Map und Ergebnis sind Pflichtfelder!', 'error');
+                    return;
+                }
+
+                // Build players data
+                const players = {};
+                let hasPlayers = false;
+                document.querySelectorAll('.player-row').forEach(row => {
+                    const name = row.dataset.player;
+                    const hero = row.querySelector('.hero-input').value.trim();
+                    const role = row.querySelector('.auto-role').textContent.trim();
+                    if (hero && hero !== '—') {
+                        players[name] = { hero, role: role === '—' ? '' : role };
+                        hasPlayers = true;
+                    }
+                });
+
+                if (!hasPlayers) {
+                    showToast('Mindestens ein Hero muss eingetragen sein!', 'error');
+                    return;
+                }
+
+                const data = {
+                    match_id: matchId,
+                    date: date,
+                    time: time,
+                    season: document.getElementById('season-select').value,
+                    map: map,
+                    gamemode: gamemode,
+                    result: selectedResult,
+                    attack_defense: selectedAD || 'N/A',
+                    players: players,
+                };
+
+                const btn = document.getElementById('submit-btn');
+                btn.disabled = true;
+
+                try {
+                    const isEdit = editingMatchId !== null;
+                    const url = isEdit ? `/api/matches/${editingMatchId}` : '/api/matches';
+                    const method = isEdit ? 'PUT' : 'POST';
+
+                    const resp = await fetch(url, {
+                        method: method,
+                        headers: { 'Content-Type': 'application/json', 'X-Input-Pin': PIN },
+                        body: JSON.stringify(data),
+                    });
+
+                    const result = await resp.json();
+                    if (result.ok) {
+                        showToast(isEdit ? 'Match aktualisiert ✓' : 'Match gespeichert ✓', 'success');
+                        // Increment next ID
+                        if (!isEdit) mappings.nextMatchId = matchId + 1;
+                        resetForm();
+                        loadHistory();
+                    } else {
+                        showToast('Fehler: ' + (result.error || 'unbekannt'), 'error');
+                    }
+                } catch (e) {
+                    showToast('Netzwerkfehler: ' + e.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+
+            // ============================================================
+            // History
+            // ============================================================
+            async function loadHistory() {
+                try {
+                    const resp = await fetch('/api/matches?limit=20', {
+                        headers: { 'X-Input-Pin': PIN }
+                    });
+                    if (!resp.ok) return;
+                    const matches = await resp.json();
+                    renderHistory(matches);
+                } catch (e) { /* silent */ }
+            }
+
+            function renderHistory(matches) {
+                const body = document.getElementById('history-body');
+                body.innerHTML = '';
+                matches.forEach(m => {
+                    const tr = document.createElement('tr');
+                    const res = m.result || '';
+                    const cls = res.toLowerCase() === 'win' ? 'win' : res.toLowerCase() === 'lose' ? 'lose' : 'draw';
+
+                    // Build player summary
+                    const ps = m.players ? Object.entries(m.players).map(([n, p]) => `${n}: ${p.hero}`).join(', ') : '';
+
+                    tr.innerHTML = `
+        <td>${m.match_id || ''}</td>
+        <td>${m.date || ''}</td>
+        <td>${m.map || ''}</td>
+        <td class="${cls}">${res}</td>
+        <td style="font-size:12px">${ps}</td>
+        <td>
+          <button class="btn-sm edit-btn" data-id="${m.match_id}">✏️</button>
+          <button class="btn-sm danger del-btn" data-id="${m.match_id}">🗑️</button>
+        </td>
+      `;
+                    body.appendChild(tr);
+                });
+
+                // Event listeners
+                body.querySelectorAll('.edit-btn').forEach(btn => {
+                    btn.addEventListener('click', () => loadMatchForEdit(parseInt(btn.dataset.id), matches));
+                });
+                body.querySelectorAll('.del-btn').forEach(btn => {
+                    btn.addEventListener('click', () => confirmDelete(parseInt(btn.dataset.id)));
+                });
+            }
+
+            // ============================================================
+            // Edit
+            // ============================================================
+            function loadMatchForEdit(matchId, matches) {
+                const m = matches.find(x => x.match_id === matchId);
+                if (!m) return;
+
+                editingMatchId = matchId;
+                document.getElementById('f-matchid').value = m.match_id;
+                document.getElementById('f-date').value = m.date || '';
+                document.getElementById('f-time').value = m.time || '';
+                document.getElementById('f-map').value = m.map || '';
+                document.getElementById('f-gamemode').value = m.gamemode || '';
+                setResult(m.result || '');
+                setAD(m.attack_defense || '', false);
+                document.getElementById('season-select').value = m.season || mappings.currentSeason;
+
+                // Set heroes
+                if (m.players) {
+                    Object.entries(m.players).forEach(([name, data]) => {
+                        // Make sure player is active
+                        if (!activePlayers[name]) {
+                            activePlayers[name] = true;
+                            localStorage.setItem('ow_active_players', JSON.stringify(activePlayers));
+                        }
+                    });
+                    buildPlayerRows();
+                    // Fill in hero values after rebuild
+                    setTimeout(() => {
+                        Object.entries(m.players).forEach(([name, data]) => {
+                            const inp = document.querySelector(`.hero-input[data-player="${name}"]`);
+                            const roleEl = document.querySelector(`.auto-role[data-player="${name}"]`);
+                            if (inp) inp.value = data.hero || '';
+                            if (roleEl) roleEl.textContent = data.role || '—';
+                        });
+                    }, 50);
+                }
+
+                document.getElementById('submit-btn').textContent = 'Match aktualisieren';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+
+            // ============================================================
+            // Delete
+            // ============================================================
+            let pendingDeleteId = null;
+            const confirmOverlay = document.getElementById('confirm-overlay');
+            document.getElementById('confirm-yes').addEventListener('click', async () => {
+                if (pendingDeleteId === null) return;
+                confirmOverlay.classList.add('hidden');
+                try {
+                    const resp = await fetch(`/api/matches/${pendingDeleteId}`, {
+                        method: 'DELETE',
+                        headers: { 'X-Input-Pin': PIN }
+                    });
+                    const r = await resp.json();
+                    if (r.ok) {
+                        showToast('Match gelöscht', 'success');
+                        loadHistory();
+                    } else {
+                        showToast('Fehler beim Löschen', 'error');
+                    }
+                } catch (e) {
+                    showToast('Netzwerkfehler', 'error');
+                }
+                pendingDeleteId = null;
+            });
+            document.getElementById('confirm-no').addEventListener('click', () => {
+                confirmOverlay.classList.add('hidden');
+                pendingDeleteId = null;
+            });
+
+            function confirmDelete(id) {
+                pendingDeleteId = id;
+                document.getElementById('confirm-text').textContent = `Match #${id} wirklich löschen?`;
+                confirmOverlay.classList.remove('hidden');
+            }
+
+            // ============================================================
+            // Excel Export
+            // ============================================================
+            function setupExport() {
+                document.getElementById('export-btn').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const a = document.createElement('a');
+                    a.href = '/api/export-excel?token=' + encodeURIComponent(PIN);
+                    a.download = 'ow_stats_export.xlsx';
+                    // We need to pass the PIN, so use fetch
+                    fetch('/api/export-excel', { headers: { 'X-Input-Pin': PIN } })
+                        .then(r => r.blob())
+                        .then(blob => {
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'ow_stats_export.xlsx';
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            showToast('Export heruntergeladen', 'success');
+                        })
+                        .catch(() => showToast('Export fehlgeschlagen', 'error'));
+                });
+            }
+
+            // ============================================================
+            // SSE (Real-time updates) with polling fallback
+            // ============================================================
+            function setupSSE() {
+                let lastToken = '';
+
+                // Try SSE first
+                try {
+                    const es = new EventSource('/api/stream');
+                    es.onmessage = (e) => {
+                        try {
+                            const d = JSON.parse(e.data);
+                            if (lastToken && d.token !== lastToken) {
+                                loadHistory();
+                                // Bump nextMatchId
+                                fetch('/api/mappings').then(r => r.json()).then(m => {
+                                    if (m.nextMatchId) mappings.nextMatchId = m.nextMatchId;
+                                });
+                            }
+                            lastToken = d.token;
+                        } catch (err) { }
+                    };
+                    es.onerror = () => {
+                        es.close();
+                        // Fallback to polling
+                        startPolling();
+                    };
+                } catch (e) {
+                    startPolling();
+                }
+
+                function startPolling() {
+                    setInterval(async () => {
+                        try {
+                            const r = await fetch('/api/change-token');
+                            const d = await r.json();
+                            if (lastToken && d.token !== lastToken) {
+                                loadHistory();
+                            }
+                            lastToken = d.token;
+                        } catch (e) { }
+                    }, 3000);
+                }
+            }
+
+            // ============================================================
+            // Toast
+            // ============================================================
+            function showToast(msg, type = 'success') {
+                const el = document.getElementById('toast');
+                el.textContent = msg;
+                el.className = 'toast show ' + type;
+                setTimeout(() => el.className = 'toast', 2500);
+            }
+
+        })();
+    </script>
+</body>
+
+</html>

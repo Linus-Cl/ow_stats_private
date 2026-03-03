@@ -1,0 +1,20 @@
+# https://render.com/docs/yaml-spec
+services:
+  - type: web
+    name: ow-stats
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.8"
+      - key: INPUT_PIN
+        sync: false  # set manually in Render dashboard
+      - key: REFRESH_TOKEN
+        sync: false
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false  # paste the entire JSON content of your Firebase service account key
+      - key: ENABLE_BG_UPDATER
+        value: "1"
+      - key: AUTO_UPDATE_MINUTES
+        value: "5"
