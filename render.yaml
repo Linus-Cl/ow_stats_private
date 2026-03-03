@@ -15,6 +15,4 @@ services:
       - key: FIREBASE_CREDENTIALS_JSON
         sync: false  # paste the entire JSON content of your Firebase service account key
       - key: ENABLE_BG_UPDATER
-        value: "1"
-      - key: AUTO_UPDATE_MINUTES
-        value: "5"
+        value: "0"  # Excel-Cloud-Sync deaktiviert; Daten kommen von Firestore

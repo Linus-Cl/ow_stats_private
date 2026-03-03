@@ -1881,6 +1881,34 @@ except Exception:
     pass
 
 
+# --- Self-Ping (keeps Render Free Tier awake, prevents cold-start 5580 reads) ---
+def _self_ping_loop():
+    """Ping the app's own /health endpoint every ~9 minutes.
+    Render Free Tier sleeps after 15 min of no inbound requests.
+    RENDER_EXTERNAL_URL is set automatically by Render.
+    """
+    import urllib.request
+    url = os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        return  # local dev – don't ping
+    health_url = url.rstrip("/") + "/health"
+    interval = 9 * 60  # 9 minutes
+    time.sleep(30)  # wait for gunicorn to be ready before first ping
+    while True:
+        try:
+            urllib.request.urlopen(health_url, timeout=10)
+        except Exception:
+            pass  # silent – just keep the process alive
+        time.sleep(interval)
+
+
+try:
+    t_ping = threading.Thread(target=_self_ping_loop, daemon=True)
+    t_ping.start()
+except Exception:
+    pass
+
+
 # --- Branding Helpers (optional custom logos) ---
 def _resolve_brand_logo_sources():
     """
@@ -3635,7 +3663,9 @@ def api_get_matches():
     limit = int(request.args.get("limit", 30))
     # Pass limit directly to Firestore – avoids loading all 5000+ docs just for 20 rows
     matches = (
-        firebase_service.get_all_matches(limit=limit) if firebase_service.is_available() else []
+        firebase_service.get_all_matches(limit=limit)
+        if firebase_service.is_available()
+        else []
     )
 
     return (json.dumps(matches, default=str), 200, {"Content-Type": "application/json"})
@@ -3902,6 +3932,12 @@ def _remove_df_row(match_id: int):
 
 
 # --- Input Page (served as static HTML) ---
+@server.route("/health")
+def health_check():
+    """Lightweight liveness probe – no DB reads."""
+    return ("{\"ok\":true}", 200, {"Content-Type": "application/json"})
+
+
 @server.route("/input")
 def input_page():
     """Serve the match input page."""
