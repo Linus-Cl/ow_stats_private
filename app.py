@@ -3797,66 +3797,69 @@ def api_sse_stream():
 
 
 # --- Merged Data Helper ---
+def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
+    """Convert Firestore match documents to a DataFrame matching the Excel schema."""
+    rows = []
+    for m in fb_matches:
+        row = {
+            "Match ID": m.get("match_id"),
+            "Win Lose": m.get("result"),
+            "Map": m.get("map"),
+            "Gamemode": m.get("gamemode"),
+            "Attack Def": m.get("attack_defense"),
+            "Datum": m.get("date"),
+            "Season": m.get("season"),
+            "Time": m.get("time"),
+        }
+        players = m.get("players", {})
+        for pname, pdata in players.items():
+            row[f"{pname} Hero"] = pdata.get("hero", "nicht dabei")
+            row[f"{pname} Rolle"] = pdata.get("role", "nicht dabei")
+        for pname in constants.players:
+            if f"{pname} Hero" not in row:
+                row[f"{pname} Hero"] = "nicht dabei"
+            if f"{pname} Rolle" not in row:
+                row[f"{pname} Rolle"] = "nicht dabei"
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows)
+    if "Match ID" in result.columns:
+        result["Match ID"] = pd.to_numeric(result["Match ID"], errors="coerce")
+        result.sort_values("Match ID", ascending=False, inplace=True)
+        result.reset_index(drop=True, inplace=True)
+    return result
+
+
 def _build_merged_df() -> pd.DataFrame:
-    """Build a DataFrame that merges Excel data with Firestore matches."""
-    frames = []
-
-    # Legacy Excel data
-    if not df.empty:
-        frames.append(df.copy())
-
-    # Firestore data
+    """Return authoritative DataFrame.
+    If Firestore is available → use ONLY Firestore (single source of truth).
+    Otherwise → fall back to Excel (legacy).
+    """
     if firebase_service.is_available():
         fb_matches = firebase_service.get_all_matches()
         if fb_matches:
-            # Flatten the nested players dict into per-player columns
-            rows = []
-            for m in fb_matches:
-                row = {
-                    "Match ID": m.get("match_id"),
-                    "Win Lose": m.get("result"),
-                    "Map": m.get("map"),
-                    "Gamemode": m.get("gamemode"),
-                    "Attack Def": m.get("attack_defense"),
-                    "Datum": m.get("date"),
-                    "Season": m.get("season"),
-                    "Time": m.get("time"),
-                }
-                players = m.get("players", {})
-                for pname, pdata in players.items():
-                    row[f"{pname} Hero"] = pdata.get("hero", "nicht dabei")
-                    row[f"{pname} Rolle"] = pdata.get("role", "nicht dabei")
-                # Fill missing players
-                for pname in constants.players:
-                    if f"{pname} Hero" not in row:
-                        row[f"{pname} Hero"] = "nicht dabei"
-                    if f"{pname} Rolle" not in row:
-                        row[f"{pname} Rolle"] = "nicht dabei"
-                rows.append(row)
-            if rows:
-                fb_df = pd.DataFrame(rows)
-                frames.append(fb_df)
+            return _firestore_matches_to_df(fb_matches)
+        # Firestore connected but empty → fall through to Excel so UI isn't blank
+        print("[Data] Firestore available but empty – falling back to Excel")
 
-    if not frames:
-        return pd.DataFrame()
-
-    merged = pd.concat(frames, ignore_index=True)
-    # Deduplicate by Match ID (Firestore wins if duplicate)
-    if "Match ID" in merged.columns:
-        merged["Match ID"] = pd.to_numeric(merged["Match ID"], errors="coerce")
-        merged.sort_values("Match ID", ascending=False, inplace=True)
-        merged.drop_duplicates(subset=["Match ID"], keep="first", inplace=True)
-        merged.reset_index(drop=True, inplace=True)
-    return merged
+    # Fallback: Excel only
+    if not df.empty:
+        return df.copy()
+    return pd.DataFrame()
 
 
 def _reload_merged_data():
-    """Reload the global df with merged data from Excel + Firestore."""
+    """Reload the global df.
+    Firestore = primary source; Excel only touched when Firestore unavailable.
+    """
     global df
-    load_data(use_local=True)  # refresh Excel
-    merged = _build_merged_df()
-    if not merged.empty:
-        df = merged
+    if firebase_service.is_available():
+        merged = _build_merged_df()
+        if not merged.empty:
+            df = merged
+    else:
+        load_data(use_local=True)  # refresh from Excel (legacy path)
     # Bump the data token so Dash clients pick up the change
     try:
         _set_app_state("data_token", str(int(time.time() * 1000)))
@@ -6545,6 +6548,15 @@ def _update_online_counter(_n, lang_data, _sid):
     lang = (lang_data or {}).get("lang", "en")
     count = _count_active()
     return f"{tr('online_now', lang)}: {count}"
+
+
+# --- Initial Firestore data load (runs after all definitions) ---
+try:
+    _reload_merged_data()
+    src = "Firestore" if firebase_service.is_available() else "Excel (Fallback)"
+    print(f"[Startup] Data source: {src}, {len(df)} rows loaded")
+except Exception as _startup_e:
+    print(f"[Startup] Data reload warning: {_startup_e}")
 
 
 if __name__ == "__main__":
