@@ -3570,6 +3570,8 @@ def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
         result["Match ID"] = pd.to_numeric(result["Match ID"], errors="coerce")
         result.sort_values("Match ID", ascending=False, inplace=True)
         result.reset_index(drop=True, inplace=True)
+    if "Datum" in result.columns:
+        result["Datum"] = pd.to_datetime(result["Datum"], errors="coerce")
     # Use categoricals for repetitive string columns (same as load_data)
     _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
     for _p in getattr(constants, "players", []):
