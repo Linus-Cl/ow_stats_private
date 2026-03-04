@@ -45,6 +45,7 @@ df = pd.DataFrame()
 # --- Local JSONL store (primary data source; Firestore is backup) ---
 LOCAL_DATA_FILE = "local_data.jsonl"
 _jsonl_lock = threading.Lock()
+_jsonl_last_mtime: float = 0.0  # tracks last-seen mtime to skip redundant reloads
 
 
 def _jsonl_read() -> list:
@@ -3639,7 +3640,9 @@ def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
         result["Jahr"] = result["Datum"].dt.year.where(valid_dates)
         result["Monat"] = result["Datum"].dt.month.where(valid_dates)
         result["Wochentag"] = result["Datum"].dt.day_name().where(valid_dates)
-        result["KW"] = result["Datum"].dt.isocalendar().week.astype("Int64").where(valid_dates)
+        result["KW"] = (
+            result["Datum"].dt.isocalendar().week.astype("Int64").where(valid_dates)
+        )
     # Use categoricals for repetitive string columns (same as load_data)
     _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
     for _p in getattr(constants, "players", []):
@@ -3675,16 +3678,23 @@ def _build_merged_df() -> pd.DataFrame:
 
 
 def _reload_merged_data():
-    """Reload the global df from local JSONL store."""
-    global df
+    """Reload the global df from local JSONL store.
+    Skips the rebuild if the file hasn't changed since last load (mtime check).
+    """
+    global df, _jsonl_last_mtime
+    try:
+        current_mtime = os.path.getmtime(LOCAL_DATA_FILE)
+    except OSError:
+        current_mtime = 0.0
+
+    if current_mtime and current_mtime == _jsonl_last_mtime and not df.empty:
+        # File unchanged – no need to rebuild
+        return
+
     merged = _build_merged_df()
     if not merged.empty:
         df = merged
-    # Bump the data token so Dash clients pick up the change
-    try:
-        _set_app_state("data_token", str(int(time.time() * 1000)))
-    except Exception:
-        pass
+        _jsonl_last_mtime = current_mtime
 
 
 def _patch_df_with_match(match_data: dict):
@@ -3729,11 +3739,21 @@ def health_check():
 
 @server.route("/input")
 def input_page():
-    """Serve the match input page."""
+    """Serve the match input page — always uncached so updates deploy immediately."""
     input_html_path = os.path.join(os.path.dirname(__file__), "assets", "input.html")
     try:
         with open(input_html_path, "r", encoding="utf-8") as f:
-            return (f.read(), 200, {"Content-Type": "text/html; charset=utf-8"})
+            content = f.read()
+        return (
+            content,
+            200,
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     except FileNotFoundError:
         return ("Input page not found", 404)
 
@@ -4672,13 +4692,17 @@ def on_view_last_active_day(n):
 def poll_server_update_token(_n, current_token):
     # Read the server-wide token from the shared DB (cross-worker safe)
     token = _get_app_state("data_token") or ""
-    is_initial = not current_token  # True on every fresh page load
-    if is_initial or token != (current_token or ""):
-        # Reload df from local JSONL so all dependent callbacks see fresh data
+    # Only reload df (expensive) when the token actually changed — i.e. real data change
+    if token != (current_token or ""):
         try:
             _reload_merged_data()
         except Exception as _e:
             print(f"[Poll] reload warning: {_e}")
+        return token
+    # On initial call (current_token is None/empty): just return the stored token
+    # so downstream callbacks get the right initial value — no df reload needed
+    # because df is already correctly loaded at startup.
+    if not current_token:
         return token
     return no_update
 
