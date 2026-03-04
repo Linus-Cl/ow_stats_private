@@ -4470,7 +4470,11 @@ def calculate_winrate(data, group_col):
     data = data[data[group_col].notna() & (data[group_col] != "")]
     if data.empty:
         return pd.DataFrame(columns=[group_col, "Win", "Lose", "Winrate", "Spiele"])
-    grouped = data.groupby([group_col, "Win Lose"]).size().unstack(fill_value=0)
+    grouped = (
+        data.groupby([group_col, "Win Lose"], observed=False)
+        .size()
+        .unstack(fill_value=0)
+    )
     if "Win" not in grouped:
         grouped["Win"] = 0
     if "Lose" not in grouped:
