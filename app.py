@@ -179,9 +179,10 @@ def _init_active_db():
     Input("tabs", "active_tab"),
     Input("lang-store", "data"),
     Input("daily-date", "date"),
+    Input("server-update-token", "data"),
     prevent_initial_call=False,
 )
-def render_daily_report(active_tab, lang_data, selected_date):
+def render_daily_report(active_tab, lang_data, selected_date, _token):
     lang = (lang_data or {}).get("lang", "en")
     if active_tab != "tab-daily":
         return no_update, no_update
@@ -1797,7 +1798,7 @@ app.layout = html.Div(
         # Poll the server update token so all sessions pick up data changes (e.g. new match entered)
         dcc.Interval(
             id="server-update-poll",
-            interval=int(os.environ.get("POLL_UPDATE_SECONDS", "30")) * 1000,
+            interval=int(os.environ.get("POLL_UPDATE_SECONDS", "5")) * 1000,
             n_intervals=0,
         ),
         # Init client id once per tab
@@ -4671,8 +4672,13 @@ def on_view_last_active_day(n):
 def poll_server_update_token(_n, current_token):
     # Read the server-wide token from the shared DB (cross-worker safe)
     token = _get_app_state("data_token") or ""
-    # Only trigger downstream updates when the token changed.
-    if token != (current_token or ""):
+    is_initial = not current_token  # True on every fresh page load
+    if is_initial or token != (current_token or ""):
+        # Reload df from local JSONL so all dependent callbacks see fresh data
+        try:
+            _reload_merged_data()
+        except Exception as _e:
+            print(f"[Poll] reload warning: {_e}")
         return token
     return no_update
 
@@ -4682,8 +4688,9 @@ def poll_server_update_token(_n, current_token):
     Output("month-dropdown", "options"),
     Output("year-dropdown", "options"),
     Input("dummy-output", "children"),
+    Input("server-update-token", "data"),
 )
-def update_filter_options(_):
+def update_filter_options(_, _token):
     if df.empty:
         return [], [], []
     seasons = list(df["Season"].dropna().unique()) if "Season" in df.columns else []
@@ -4868,6 +4875,7 @@ def toggle_slider(tab, hero_stat, role_stat, map_stat):
     Input("player-dropdown-match-verlauf", "value"),
     Input("hero-filter-dropdown-match", "value"),
     Input("dummy-output", "children"),
+    Input("server-update-token", "data"),
     Input("lang-store", "data"),
     State("history-display-count-store", "data"),
     State("history-load-amount-dropdown", "value"),
@@ -4877,7 +4885,8 @@ def update_history_display(
     store_data_in,
     player_name,
     hero_name,
-    _,
+    _dummy,
+    _token,
     lang_data,
     current_store,
     load_amount,
@@ -4890,11 +4899,12 @@ def update_history_display(
 
     triggered_id = ctx.triggered_id if ctx.triggered_id else "dummy-output"
 
-    # Reset count if filters change, otherwise increment
+    # Reset count if filters change or data refreshes, otherwise increment
     if triggered_id in [
         "player-dropdown-match-verlauf",
         "hero-filter-dropdown-match",
         "dummy-output",
+        "server-update-token",
     ]:
         new_count = 10
     elif triggered_id == "history-display-count-store":
