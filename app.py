@@ -3,8 +3,7 @@
 # Standard library
 import os
 import re
-from io import StringIO, BytesIO
-import hashlib
+from io import BytesIO
 import json
 import subprocess
 import html as html_std
@@ -13,7 +12,6 @@ import html as html_std
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import requests
 import dash_bootstrap_components as dbc
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 from dash.exceptions import PreventUpdate
@@ -43,12 +41,6 @@ try:
 except Exception:
     pass
 df = pd.DataFrame()
-# In-Memory cache markers for conditional downloads
-_last_etag = None
-_last_modified = None
-_last_hash = None
-_update_lock = threading.Lock()
-_update_in_progress = False
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
@@ -1635,300 +1627,6 @@ def tr(key: str, lang: str) -> str:
     return v.get(lang, v.get("en", key))
 
 
-# --- Data Loading ---
-def load_data(use_local=True):
-    """
-    Loads data and performs a definitive sort by 'Match ID' descending.
-    This ensures the most recent game is always at the top.
-    """
-    global df
-    if use_local:
-        try:
-            df = pd.read_excel("local.xlsx", engine="openpyxl")
-            print("Loaded data from local.xlsx")
-        except Exception as e:
-            print(f"Error loading local file: {e}")
-            df = pd.DataFrame()
-    else:
-        try:
-            response = requests.get(constants.url)
-            response.raise_for_status()
-            df = pd.read_csv(StringIO(response.text))
-            df.to_excel("local.xlsx", index=False, engine="openpyxl")
-            print("Successfully downloaded and saved as Excel!")
-        except Exception as e:
-            print(f"Error downloading data: {e}")
-            if "df" not in globals():
-                df = pd.DataFrame()
-
-    if not df.empty:
-        # Normalize all column names to strings and strip whitespace first
-        df.columns = df.columns.map(lambda c: str(c).strip())
-
-        # Build a robust rename map for common synonyms and localized headers
-        def _norm_key(s: str) -> str:
-            return re.sub(r"[^a-z0-9]", "", s.lower())
-
-        base_map = {
-            "winlose": "Win Lose",
-            "ergebnis": "Win Lose",
-            "map": "Map",
-            "karte": "Map",
-            "matchid": "Match ID",
-            "match": "Match ID",
-            "datum": "Datum",
-            "date": "Datum",
-        }
-        ren = {}
-        for col in list(df.columns):
-            key = _norm_key(col)
-            if key in base_map:
-                ren[col] = base_map[key]
-                continue
-            # Per-player Role/Hero columns (handle English/German variants)
-            for p in getattr(constants, "players", []):
-                if not isinstance(p, str):
-                    continue
-                # Role
-                if key == _norm_key(f"{p} rolle") or key == _norm_key(f"{p} role"):
-                    ren[col] = f"{p} Rolle"
-                    break
-                # Hero
-                if key == _norm_key(f"{p} hero") or key == _norm_key(f"{p} held"):
-                    ren[col] = f"{p} Hero"
-                    break
-        if ren:
-            df.rename(columns=ren, inplace=True)
-
-        # VALIDATE REQUIRED COLUMNS (after normalization)
-        required = ["Win Lose", "Map", "Match ID"]
-        missing = [c for c in required if c not in df.columns]
-        if missing:
-            print(f"Warnung: Fehlende Pflichtspalten: {missing}")
-        if "Attack Def" in df.columns:
-            df["Attack Def"] = df["Attack Def"].str.strip()
-        if "Datum" in df.columns:
-            df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
-
-        if "Match ID" in df.columns:
-            df["Match ID"] = pd.to_numeric(df["Match ID"], errors="coerce")
-            df.sort_values("Match ID", ascending=False, inplace=True)
-            df.reset_index(drop=True, inplace=True)
-            print("DataFrame sorted by Match ID (descending).")
-        else:
-            print("Warning: 'Match ID' column not found. History may not be in order.")
-
-        # Normalize role labels across all per-player role columns
-        role_map = {
-            "DPS": "Damage",
-            "Damage": "Damage",
-            "Tank": "Tank",
-            "Support": "Support",
-        }
-        for col in df.columns:
-            if str(col).endswith(" Rolle"):
-                df[col] = df[col].astype(str).str.strip()
-                df[col] = df[col].replace(role_map)
-
-        # Convert repetitive string columns to categoricals (saves ~60-70% memory)
-        # E.g. "Map" has only 31 unique values but 5580 rows – categorical stores
-        # each string once and uses an int8 index per row instead of 50-byte objects.
-        _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
-        for _p in getattr(constants, "players", []):
-            _cat_cols += [f"{_p} Hero", f"{_p} Rolle"]
-        for _col in _cat_cols:
-            if _col in df.columns:
-                try:
-                    df[_col] = df[_col].astype("category")
-                except Exception:
-                    pass
-
-
-load_data(use_local=True)
-
-
-# --- Minimal Cloud Updater (no UI changes) ---
-def _fetch_update_from_cloud(force: bool = False) -> bool:
-    """Return True if data updated, otherwise False. Uses ETag/Last-Modified and content hash in memory.
-    Keeps UI unchanged and only refreshes when something changed."""
-    global _last_etag, _last_modified, _last_hash
-    headers = {}
-    if not force:
-        if _last_etag:
-            headers["If-None-Match"] = _last_etag
-        if _last_modified:
-            headers["If-Modified-Since"] = _last_modified
-    # Prefer OneDrive Excel if configured; otherwise use Google Drive CSV
-    use_onedrive = bool(getattr(constants, "ONEDRIVE_SHARE_URL", "").strip())
-    if use_onedrive:
-        share_url = constants.ONEDRIVE_SHARE_URL.strip()
-        # Force direct download and add a cache-busting query so CDN doesn't serve stale content
-        base = (
-            share_url
-            + ("&" if ("?" in share_url) else "?")
-            + constants.ONEDRIVE_FORCE_DOWNLOAD_PARAM
-        )
-        cb = str(int(time.time()))
-        dl_url = base + ("&" if ("?" in base) else "?") + "cb=" + cb
-        try:
-            # First, hit the view URL (no download) to nudge OneDrive to surface the latest version
-            view_headers = {
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "Accept": "text/html,application/xhtml+xml",
-            }
-            try:
-                requests.get(share_url, headers=view_headers, timeout=15)
-            except Exception:
-                pass
-            # Then request the download, avoiding conditional headers (ETag/Last-Modified)
-            req_headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
-            resp = requests.get(dl_url, headers=req_headers, timeout=30)
-        except Exception as e:
-            print(f"OneDrive fetch failed: {e}")
-            return False
-
-        if resp.status_code == 304:
-            return False
-        if resp.status_code != 200:
-            print(f"OneDrive fetch HTTP {resp.status_code}")
-            return False
-
-        content_bytes = resp.content or b""
-        new_hash = hashlib.sha256(content_bytes).hexdigest()
-        if not force and _last_hash and new_hash == _last_hash:
-            return False
-
-        try:
-            # Read Excel from bytes and save a normalized copy
-            tmp_df = pd.read_excel(BytesIO(content_bytes), engine="openpyxl")
-            tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
-            load_data(use_local=True)
-        except Exception as e:
-            print(f"OneDrive download ok, but parse/save failed: {e}")
-            return False
-
-        _last_etag = resp.headers.get("ETag", _last_etag)
-        _last_modified = resp.headers.get("Last-Modified", _last_modified)
-        _last_hash = new_hash
-        return True
-    else:
-        try:
-            resp = requests.get(constants.url, headers=headers, timeout=20)
-        except Exception as e:
-            print(f"Cloud fetch failed: {e}")
-            return False
-
-        if resp.status_code == 304:
-            # Not modified
-            return False
-        if resp.status_code != 200:
-            print(f"Cloud fetch HTTP {resp.status_code}")
-            return False
-
-        text = resp.text or ""
-        new_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
-        if not force and _last_hash and new_hash == _last_hash:
-            return False
-
-        try:
-            tmp_df = pd.read_csv(StringIO(text))
-            tmp_df.to_excel("local.xlsx", index=False, engine="openpyxl")
-            # Reload and normalize via existing loader
-            load_data(use_local=True)
-        except Exception as e:
-            print(f"Download ok, but parse/save failed: {e}")
-            return False
-
-        _last_etag = resp.headers.get("ETag", _last_etag)
-        _last_modified = resp.headers.get("Last-Modified", _last_modified)
-        _last_hash = new_hash
-        return True
-
-
-# One-time lazy cloud check at startup (conditional; no UI impact)
-try:
-    _ = os.environ.get("DISABLE_STARTUP_CLOUD_CHECK", "0")
-    if _ not in ("1", "true", "TRUE"):
-        # Perform a conditional (non-forced) fetch; set token if updated
-        if _fetch_update_from_cloud(force=False):
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-except Exception:
-    pass
-
-
-# --- Background updater (server-side) ---
-def _background_updater():
-    try:
-        interval_s = max(
-            5,
-            int(
-                float(
-                    os.environ.get("AUTO_UPDATE_MINUTES", constants.AUTO_UPDATE_MINUTES)
-                )
-                * 60
-            ),
-        )
-    except Exception:
-        interval_s = 300
-    while True:
-        try:
-            updated = _fetch_update_from_cloud(force=False)
-            if updated and _last_hash:
-                try:
-                    _set_app_state("data_token", _last_hash)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        time.sleep(interval_s)
-
-
-def _start_async_update(force: bool = False) -> bool:
-    """Start a background thread to update data without blocking the request.
-
-    Returns True if a new update was started, False if an update is already running.
-    """
-    global _update_in_progress
-
-    # Ensure only one on-demand update runs at a time (per process)
-    with _update_lock:
-        if _update_in_progress:
-            return False
-        _update_in_progress = True
-
-    def _worker():
-        global _update_in_progress
-        try:
-            updated = _fetch_update_from_cloud(force=force)
-            if updated and _last_hash:
-                try:
-                    _set_app_state("data_token", _last_hash)
-                except Exception:
-                    pass
-        except Exception:
-            # Swallow all exceptions to avoid killing the thread silently
-            pass
-        finally:
-            with _update_lock:
-                _update_in_progress = False
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    return True
-
-
-try:
-    if os.environ.get("ENABLE_BG_UPDATER", "1") in ("1", "true", "TRUE"):
-        t = threading.Thread(target=_background_updater, daemon=True)
-        t.start()
-except Exception:
-    pass
-
 
 # --- Self-Ping (keeps Render Free Tier awake, prevents cold-start 5580 reads) ---
 def _self_ping_loop():
@@ -2006,46 +1704,6 @@ except Exception as _e:
 # Force specific dark theme logo per user request
 DARK_LOGO_SRC = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Overwatch_circle_logo2.svg/640px-Overwatch_circle_logo2.svg.png"
 DARK_LOGO_INVERT = False
-
-
-# --- Secure refresh endpoint for external triggers (e.g., GitHub Actions) ---
-@server.route("/refresh-data", methods=["POST"])
-def refresh_data_route():
-    # Verify token from header or query param
-    provided = request.headers.get("X-Refresh-Token") or request.args.get("token")
-    expected = os.environ.get("REFRESH_TOKEN")
-    if not expected or provided != expected:
-        return (
-            json.dumps({"ok": False, "error": "unauthorized"}),
-            401,
-            {"Content-Type": "application/json"},
-        )
-
-    try:
-        updated = _fetch_update_from_cloud(force=True)
-        if updated:
-            try:
-                if _last_hash:
-                    _set_app_state("data_token", _last_hash)
-            except Exception:
-                pass
-        return (
-            json.dumps(
-                {
-                    "ok": True,
-                    "updated": bool(updated),
-                    "timestamp": str(pd.Timestamp.now()),
-                }
-            ),
-            200,
-            {"Content-Type": "application/json"},
-        )
-    except Exception as e:
-        return (
-            json.dumps({"ok": False, "error": str(e)}),
-            500,
-            {"Content-Type": "application/json"},
-        )
 
 
 # --- Layout ---
@@ -3934,26 +3592,17 @@ def _build_merged_df() -> pd.DataFrame:
         fb_matches = firebase_service.get_all_matches()
         if fb_matches:
             return _firestore_matches_to_df(fb_matches)
-        # Firestore connected but empty → fall through to Excel so UI isn't blank
-        print("[Data] Firestore available but empty – falling back to Excel")
 
-    # Fallback: Excel only
-    if not df.empty:
-        return df.copy()
     return pd.DataFrame()
 
 
 def _reload_merged_data():
-    """Reload the global df.
-    Firestore = primary source; Excel only touched when Firestore unavailable.
-    """
+    """Reload the global df from Firestore."""
     global df
     if firebase_service.is_available():
         merged = _build_merged_df()
         if not merged.empty:
             df = merged
-    else:
-        load_data(use_local=True)  # refresh from Excel (legacy path)
     # Bump the data token so Dash clients pick up the change
     try:
         _set_app_state("data_token", str(int(time.time() * 1000)))
