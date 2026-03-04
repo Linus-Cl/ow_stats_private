@@ -41,6 +41,69 @@ try:
 except Exception:
     pass
 df = pd.DataFrame()
+
+# --- Local JSONL store (primary data source; Firestore is backup) ---
+LOCAL_DATA_FILE = "local_data.jsonl"
+_jsonl_lock = threading.Lock()
+
+
+def _jsonl_read() -> list:
+    """Read all match dicts from the local JSONL file."""
+    try:
+        with open(LOCAL_DATA_FILE, "r", encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"[JSONL] read error: {e}")
+        return []
+
+
+def _jsonl_write(matches: list) -> None:
+    """Atomically overwrite the local JSONL file with the given match list."""
+    tmp = LOCAL_DATA_FILE + ".tmp"
+    try:
+        with _jsonl_lock:
+            with open(tmp, "w", encoding="utf-8") as f:
+                for m in matches:
+                    f.write(json.dumps(m, default=str) + "\n")
+            os.replace(tmp, LOCAL_DATA_FILE)
+    except Exception as e:
+        print(f"[JSONL] write error: {e}")
+
+
+def _jsonl_append(match_dict: dict) -> None:
+    """Append a single match to the local JSONL file."""
+    try:
+        with _jsonl_lock:
+            with open(LOCAL_DATA_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(match_dict, default=str) + "\n")
+    except Exception as e:
+        print(f"[JSONL] append error: {e}")
+
+
+def _jsonl_upsert(match_dict: dict) -> None:
+    """Replace (or add) a match by match_id in the local JSONL file."""
+    match_id = match_dict.get("match_id")
+    matches = _jsonl_read()
+    replaced = False
+    for i, m in enumerate(matches):
+        if str(m.get("match_id")) == str(match_id):
+            matches[i] = match_dict
+            replaced = True
+            break
+    if not replaced:
+        matches.append(match_dict)
+    _jsonl_write(matches)
+
+
+def _jsonl_delete(match_id: int) -> None:
+    """Remove a match by match_id from the local JSONL file."""
+    matches = _jsonl_read()
+    filtered = [m for m in matches if str(m.get("match_id")) != str(match_id)]
+    _jsonl_write(filtered)
+
+
 LIGHT_LOGO_SRC = None
 DARK_LOGO_SRC = None
 DARK_LOGO_INVERT = True
@@ -1625,7 +1688,6 @@ def tr(key: str, lang: str) -> str:
     }
     v = T.get(key, {})
     return v.get(lang, v.get("en", key))
-
 
 
 # --- Self-Ping (keeps Render Free Tier awake, prevents cold-start 5580 reads) ---
@@ -3366,25 +3428,21 @@ def api_mappings():
 
 @server.route("/api/matches", methods=["GET"])
 def api_get_matches():
-    """Return recent matches (Firestore + Excel merged) as JSON."""
+    """Return recent matches from local JSONL store (zero Firestore reads)."""
     auth_err = _verify_pin()
     if auth_err:
         return auth_err
 
     limit = int(request.args.get("limit", 30))
-    # Pass limit directly to Firestore – avoids loading all 5000+ docs just for 20 rows
-    matches = (
-        firebase_service.get_all_matches(limit=limit)
-        if firebase_service.is_available()
-        else []
-    )
-
-    return (json.dumps(matches, default=str), 200, {"Content-Type": "application/json"})
+    matches = _jsonl_read()
+    # Most recent first (highest match_id)
+    matches.sort(key=lambda m: int(m.get("match_id") or 0), reverse=True)
+    return (json.dumps(matches[:limit], default=str), 200, {"Content-Type": "application/json"})
 
 
 @server.route("/api/matches", methods=["POST"])
 def api_create_match():
-    """Create a new match in Firestore."""
+    """Create a new match: write local JSONL immediately, Firestore async."""
     auth_err = _verify_pin()
     if auth_err:
         return auth_err
@@ -3397,25 +3455,22 @@ def api_create_match():
             {"Content-Type": "application/json"},
         )
 
-    doc_id = firebase_service.save_match(data)
-    if doc_id:
-        # Update in-memory df directly — 0 Firestore reads (data is already here)
-        _patch_df_with_match(data)
-        return (
-            json.dumps({"ok": True, "doc_id": doc_id}),
-            201,
-            {"Content-Type": "application/json"},
-        )
+    # 1. Write to local store instantly (primary)
+    _jsonl_append(data)
+    # 2. Update in-memory df instantly — 0 reads
+    _patch_df_with_match(data)
+    # 3. Persist to Firestore in background (backup)
+    threading.Thread(target=firebase_service.save_match, args=(data,), daemon=True).start()
     return (
-        json.dumps({"ok": False, "error": "save failed"}),
-        500,
+        json.dumps({"ok": True, "doc_id": str(data.get("match_id", ""))}),
+        201,
         {"Content-Type": "application/json"},
     )
 
 
 @server.route("/api/matches/<int:match_id>", methods=["PUT"])
 def api_update_match(match_id):
-    """Update an existing match."""
+    """Update an existing match: update local JSONL immediately, Firestore async."""
     auth_err = _verify_pin()
     if auth_err:
         return auth_err
@@ -3429,33 +3484,29 @@ def api_update_match(match_id):
         )
 
     data["match_id"] = match_id
-    ok = firebase_service.update_match(match_id, data)
-    if ok:
-        _patch_df_with_match(data)  # 0 Firestore reads
-        return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
-    return (
-        json.dumps({"ok": False, "error": "update failed"}),
-        500,
-        {"Content-Type": "application/json"},
-    )
+    # 1. Update local store instantly
+    _jsonl_upsert(data)
+    # 2. Update in-memory df instantly
+    _patch_df_with_match(data)
+    # 3. Persist to Firestore in background
+    threading.Thread(target=firebase_service.update_match, args=(match_id, data), daemon=True).start()
+    return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
 
 
 @server.route("/api/matches/<int:match_id>", methods=["DELETE"])
 def api_delete_match(match_id):
-    """Delete a match."""
+    """Delete a match: remove from local JSONL immediately, Firestore async."""
     auth_err = _verify_pin()
     if auth_err:
         return auth_err
 
-    ok = firebase_service.delete_match(match_id)
-    if ok:
-        _remove_df_row(match_id)  # 0 Firestore reads
-        return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
-    return (
-        json.dumps({"ok": False, "error": "delete failed"}),
-        500,
-        {"Content-Type": "application/json"},
-    )
+    # 1. Remove from local store instantly
+    _jsonl_delete(match_id)
+    # 2. Remove from in-memory df instantly
+    _remove_df_row(match_id)
+    # 3. Remove from Firestore in background
+    threading.Thread(target=firebase_service.delete_match, args=(match_id,), daemon=True).start()
+    return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
 
 
 @server.route("/api/config", methods=["GET"])
@@ -3586,25 +3637,30 @@ def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
 
 
 def _build_merged_df() -> pd.DataFrame:
-    """Return authoritative DataFrame.
-    If Firestore is available → use ONLY Firestore (single source of truth).
-    Otherwise → fall back to Excel (legacy).
+    """Read from local JSONL store (primary source).
+    If the local file is missing (fresh container), bootstrap once from Firestore
+    and persist locally so subsequent restarts use the local file.
     """
+    matches = _jsonl_read()
+    if matches:
+        return _firestore_matches_to_df(matches)
+    # Bootstrap: local file missing → read Firestore once and write local file
     if firebase_service.is_available():
+        print("[Data] Local store empty – bootstrapping from Firestore (one-time read)...")
         fb_matches = firebase_service.get_all_matches()
         if fb_matches:
+            _jsonl_write(fb_matches)
+            print(f"[Data] Local store written: {len(fb_matches)} matches")
             return _firestore_matches_to_df(fb_matches)
-
     return pd.DataFrame()
 
 
 def _reload_merged_data():
-    """Reload the global df from Firestore."""
+    """Reload the global df from local JSONL store."""
     global df
-    if firebase_service.is_available():
-        merged = _build_merged_df()
-        if not merged.empty:
-            df = merged
+    merged = _build_merged_df()
+    if not merged.empty:
+        df = merged
     # Bump the data token so Dash clients pick up the change
     try:
         _set_app_state("data_token", str(int(time.time() * 1000)))
@@ -6341,10 +6397,11 @@ def _update_online_counter(_n, lang_data, _sid):
     return f"{tr('online_now', lang)}: {count}"
 
 
-# --- Initial Firestore data load (runs after all definitions) ---
+# --- Initial data load: local JSONL first, Firestore bootstrap if needed ---
 try:
     _reload_merged_data()
-    src = "Firestore" if firebase_service.is_available() else "Excel (Fallback)"
+    local_exists = os.path.exists(LOCAL_DATA_FILE)
+    src = "local JSONL" if local_exists else "Firestore bootstrap"
     print(f"[Startup] Data source: {src}, {len(df)} rows loaded")
 except Exception as _startup_e:
     print(f"[Startup] Data reload warning: {_startup_e}")
