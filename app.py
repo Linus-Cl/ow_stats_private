@@ -3437,7 +3437,11 @@ def api_get_matches():
     matches = _jsonl_read()
     # Most recent first (highest match_id)
     matches.sort(key=lambda m: int(m.get("match_id") or 0), reverse=True)
-    return (json.dumps(matches[:limit], default=str), 200, {"Content-Type": "application/json"})
+    return (
+        json.dumps(matches[:limit], default=str),
+        200,
+        {"Content-Type": "application/json"},
+    )
 
 
 @server.route("/api/matches", methods=["POST"])
@@ -3460,7 +3464,9 @@ def api_create_match():
     # 2. Update in-memory df instantly — 0 reads
     _patch_df_with_match(data)
     # 3. Persist to Firestore in background (backup)
-    threading.Thread(target=firebase_service.save_match, args=(data,), daemon=True).start()
+    threading.Thread(
+        target=firebase_service.save_match, args=(data,), daemon=True
+    ).start()
     return (
         json.dumps({"ok": True, "doc_id": str(data.get("match_id", ""))}),
         201,
@@ -3489,7 +3495,9 @@ def api_update_match(match_id):
     # 2. Update in-memory df instantly
     _patch_df_with_match(data)
     # 3. Persist to Firestore in background
-    threading.Thread(target=firebase_service.update_match, args=(match_id, data), daemon=True).start()
+    threading.Thread(
+        target=firebase_service.update_match, args=(match_id, data), daemon=True
+    ).start()
     return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
 
 
@@ -3505,7 +3513,9 @@ def api_delete_match(match_id):
     # 2. Remove from in-memory df instantly
     _remove_df_row(match_id)
     # 3. Remove from Firestore in background
-    threading.Thread(target=firebase_service.delete_match, args=(match_id,), daemon=True).start()
+    threading.Thread(
+        target=firebase_service.delete_match, args=(match_id,), daemon=True
+    ).start()
     return (json.dumps({"ok": True}), 200, {"Content-Type": "application/json"})
 
 
@@ -3623,6 +3633,12 @@ def _firestore_matches_to_df(fb_matches: list) -> pd.DataFrame:
         result.reset_index(drop=True, inplace=True)
     if "Datum" in result.columns:
         result["Datum"] = pd.to_datetime(result["Datum"], errors="coerce")
+        # Derived date columns used throughout the app
+        valid_dates = result["Datum"].notna()
+        result["Jahr"] = result["Datum"].dt.year.where(valid_dates)
+        result["Monat"] = result["Datum"].dt.month.where(valid_dates)
+        result["Wochentag"] = result["Datum"].dt.day_name().where(valid_dates)
+        result["KW"] = result["Datum"].dt.isocalendar().week.astype("Int64").where(valid_dates)
     # Use categoricals for repetitive string columns (same as load_data)
     _cat_cols = ["Win Lose", "Map", "Season", "Gamemode", "Attack Def"]
     for _p in getattr(constants, "players", []):
@@ -3646,7 +3662,9 @@ def _build_merged_df() -> pd.DataFrame:
         return _firestore_matches_to_df(matches)
     # Bootstrap: local file missing → read Firestore once and write local file
     if firebase_service.is_available():
-        print("[Data] Local store empty – bootstrapping from Firestore (one-time read)...")
+        print(
+            "[Data] Local store empty – bootstrapping from Firestore (one-time read)..."
+        )
         fb_matches = firebase_service.get_all_matches()
         if fb_matches:
             _jsonl_write(fb_matches)
@@ -4156,9 +4174,9 @@ def filter_data(player, season=None, month=None, year=None):
     if season:
         temp = temp[temp["Season"] == season]
     else:
-        if year is not None:
+        if year is not None and "Jahr" in temp.columns:
             temp = temp[pd.to_numeric(temp["Jahr"], errors="coerce") == int(year)]
-        if month is not None:
+        if month is not None and "Monat" in temp.columns:
             temp = temp[temp["Monat"] == month]
     role_col, hero_col = f"{player} Rolle", f"{player} Hero"
     if role_col not in temp.columns or hero_col not in temp.columns:
@@ -4668,16 +4686,22 @@ def poll_server_update_token(_n, current_token):
 def update_filter_options(_):
     if df.empty:
         return [], [], []
-    seasons = list(df["Season"].dropna().unique())
+    seasons = list(df["Season"].dropna().unique()) if "Season" in df.columns else []
     seasons.sort(key=season_sort_key, reverse=True)
     season_options = [{"label": format_season_display(s), "value": s} for s in seasons]
-    month_options = [
-        {"label": m, "value": m} for m in sorted(df["Monat"].dropna().unique())
-    ]
-    year_options = [
-        {"label": str(int(y)), "value": int(y)}
-        for y in sorted(df["Jahr"].dropna().unique(), reverse=True)
-    ]
+    month_options = (
+        [{"label": m, "value": m} for m in sorted(df["Monat"].dropna().unique())]
+        if "Monat" in df.columns
+        else []
+    )
+    year_options = (
+        [
+            {"label": str(int(y)), "value": int(y)}
+            for y in sorted(df["Jahr"].dropna().unique(), reverse=True)
+        ]
+        if "Jahr" in df.columns
+        else []
+    )
     return season_options, month_options, year_options
 
 
