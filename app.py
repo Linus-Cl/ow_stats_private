@@ -3,6 +3,7 @@
 # Standard library
 import os
 import re
+import unicodedata
 from io import BytesIO
 import json
 import subprocess
@@ -187,6 +188,10 @@ def render_daily_report(active_tab, lang_data, selected_date, _token):
     lang = (lang_data or {}).get("lang", "en")
     if active_tab != "tab-daily":
         return no_update, no_update
+    # Always sync from JSONL before rendering — mtime guard makes this a no-op
+    # when the file hasn't changed, but fixes multi-worker stale-df race conditions
+    # (e.g. Worker A saved a match, Worker B renders the report before its poll fires).
+    _reload_merged_data()
     if df.empty or "Datum" not in df.columns:
         return html.Div(tr("no_data", lang)), []
 
@@ -1746,7 +1751,7 @@ def _resolve_brand_logo_sources():
                 dark_src = f"/assets/branding/logo_dark.{ext}"
                 break
     # Fallbacks
-    default_src = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png"
+    default_src = "/assets/branding/logo_dark.svg"
     if not light_src:
         light_src = default_src
     dark_invert = False
@@ -1761,12 +1766,13 @@ def _resolve_brand_logo_sources():
 try:
     LIGHT_LOGO_SRC, DARK_LOGO_SRC, DARK_LOGO_INVERT = _resolve_brand_logo_sources()
 except Exception as _e:
-    LIGHT_LOGO_SRC = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Overwatch_circle_logo.svg/1024px-Overwatch_circle_logo.svg.png"
-    DARK_LOGO_SRC = LIGHT_LOGO_SRC
-    DARK_LOGO_INVERT = True
+    LIGHT_LOGO_SRC = "/assets/branding/logo_dark.svg"
+    DARK_LOGO_SRC = "/assets/branding/logo_light.svg"
+    DARK_LOGO_INVERT = False
 
-# Force specific dark theme logo per user request
-DARK_LOGO_SRC = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Overwatch_circle_logo2.svg/640px-Overwatch_circle_logo2.svg.png"
+# Swap: light-mode shows the dark logo (contrast on white), dark-mode shows the light logo
+LIGHT_LOGO_SRC = "/assets/branding/logo_dark.svg"
+DARK_LOGO_SRC = "/assets/branding/logo_light.svg"
 DARK_LOGO_INVERT = False
 
 
@@ -4064,24 +4070,29 @@ def get_map_image_url(map_name):
     Assumes images are in 'assets/maps/' and named like 'map_name.png'.
     """
     if not isinstance(map_name, str):
-        return "/assets/maps/default.png"  # Fallback for non-string input
+        return "/assets/maps/default.png"
 
-    # Clean the map name to create a valid filename
-    # e.g., "King's Row" -> "kings_row"
-    cleaned_name = map_name.lower().replace(" ", "_").replace("'", "")
+    # Typo/alias corrections (old stored values → canonical filename base)
+    _MAP_FILENAME_ALIAS = {
+        "illios": "ilios",
+        "watchpoint_gibralta": "watchpoint_gibraltar",
+    }
 
-    # Check for both .jpg and .png extensions
+    # Normalize: lowercase, strip diacritics (ç→c, í→i, ã→a, ö→o …), replace spaces/apostrophes
+    normalized = unicodedata.normalize("NFD", map_name.lower())
+    stripped = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    cleaned_name = stripped.replace(" ", "_").replace("'", "")
+
+    # Apply alias if needed
+    cleaned_name = _MAP_FILENAME_ALIAS.get(cleaned_name, cleaned_name)
+
     for ext in [".jpg", ".png"]:
         image_filename = f"{cleaned_name}{ext}"
-        # The path Dash uses to serve from the assets folder
         asset_path = f"/assets/maps/{image_filename}"
-        # The actual file system path to check if the file exists
         local_path = os.path.join("assets", "maps", image_filename)
-
         if os.path.exists(local_path):
             return asset_path
 
-    # If no specific image is found, return the default
     return "/assets/maps/default.png"
 
 
@@ -4101,10 +4112,18 @@ def get_hero_image_url(hero_name):
         # Wrecking Ball
         "wreckingball": "wrecking_ball",
         "hammond": "wrecking_ball",
-        # Soldier 76 variations end up covered by cleaning rules, but keep explicit for clarity
-        "soldier76": "soldier_76",
-        # Torbjorn without umlaut
-        "torbjorn": "torbjörn",
+        # Soldier 76 → file is soldier.png
+        "soldier76": "soldier",
+        # Zenyatta → file is zen.png
+        "zenyatta": "zen",
+        # Baptiste → file is baptist.png
+        "baptiste": "baptist",
+        # Torbjörn: re.sub strips ö entirely → "torbjrn"
+        "torbjrn": "torbjörn",
+        # Lúcio: re.sub strips ú entirely → "lcio", file is lucio.png
+        "lcio": "lucio",
+        # Jetpack Cat: re.sub removes space → "jetpackcat", file is jetpack_cat.png
+        "jetpackcat": "jetpack_cat",
     }
 
     # --- Create a list of potential filenames to try ---
@@ -4239,18 +4258,28 @@ def season_sort_key(s) -> int:
 
 
 def format_season_display(s) -> str:
-    """Format season value for display labels, e.g. 'Season 19' → 'Season 19'."""
+    """Format season value for display labels.
+
+    Seasons 1–20: 'Season N'
+    Seasons 21+:  'YYYY: Season N' (6 seasons per year, starting 2026)
+      e.g.  21 → '2026: Season 1'
+            26 → '2026: Season 6'
+            27 → '2027: Season 1'
+
+    The raw data value (e.g. 'Season 21') is kept as the dropdown *value*
+    so filtering & sorting still use the original season numbers.
+    """
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return "Unknown Season"
-    s = str(s).strip()
-    low = s.lower()
-    if low.startswith("season"):
-        return s  # already correct format
-    # bare number → prefix
-    try:
-        return f"Season {int(float(s))}"
-    except Exception:
-        return s
+    num = season_sort_key(s)
+    if num <= 0:
+        return str(s)
+    if num >= 21:
+        offset = num - 21
+        year = 2026 + (offset // 6)
+        season_in_year = (offset % 6) + 1
+        return f"{year}: Season {season_in_year}"
+    return f"Season {num}"
 
 
 def generate_history_layout_simple(games_df, lang: str = "en"):
@@ -4603,9 +4632,17 @@ def build_detailed_hero_selectors(
         return dbc.Alert(tr("no_data_loaded", lang), color="danger")
 
     # Zeitrahmen filtern
-    temp = df.copy()  # copy needed: apply_map_filter then mutate Season/Jahr columns
-    if maps_selected:
-        temp = temp[temp["Map"].isin(maps_selected)]
+    temp = df.copy()
+    if season and "Season" in temp.columns:
+        temp = temp[temp["Season"] == season]
+    if month and "Monat" in temp.columns:
+        temp = temp[temp["Monat"] == month]
+    if year and "Jahr" in temp.columns:
+        temp = temp[temp["Jahr"] == year]
+
+    cols = []
+    for p in selected_players:
+        role = role_by_player.get(p)
         hero_col = f"{p} Hero"
         role_col = f"{p} Rolle"
         options = []
@@ -4715,6 +4752,7 @@ def poll_server_update_token(_n, current_token):
     Input("server-update-token", "data"),
 )
 def update_filter_options(_, _token):
+    _reload_merged_data()  # mtime-guarded: no-op if file unchanged; fixes multi-worker race
     if df.empty:
         return [], [], []
     seasons = list(df["Season"].dropna().unique()) if "Season" in df.columns else []
@@ -4916,6 +4954,7 @@ def update_history_display(
     load_amount,
 ):
     global df
+    _reload_merged_data()  # mtime-guarded: no-op if file unchanged; fixes multi-worker race
     if df.empty:
         return [dbc.Alert("Keine Match History verfügbar.", color="danger")], {
             "count": 10

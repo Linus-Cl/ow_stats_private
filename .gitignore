@@ -2,6 +2,10 @@
 active_sessions.db
 *.db-journal
 
+# Local JSONL data store (dev test data – never push to repo)
+local_data.jsonl
+local_data.jsonl.tmp
+
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]

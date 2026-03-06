@@ -307,12 +307,12 @@
         }
 
         /* --- Attack/Def Buttons --- */
-        .ad-group {
+        .atk-def-group {
             display: flex;
             gap: 6px
         }
 
-        .ad-btn {
+        .atk-def-btn {
             flex: 1;
             padding: 7px;
             border: 1px solid var(--border);
@@ -325,17 +325,17 @@
             text-align: center
         }
 
-        .ad-btn:hover {
+        .atk-def-btn:hover {
             border-color: var(--accent)
         }
 
-        .ad-btn.selected {
+        .atk-def-btn.selected {
             border-color: var(--accent);
             background: rgba(59, 130, 246, .15);
             color: var(--accent)
         }
 
-        .ad-btn.auto {
+        .atk-def-btn.auto {
             opacity: .6;
             cursor: default
         }
@@ -653,10 +653,10 @@
         <div class="form-grid" style="grid-template-columns:1fr">
             <div class="form-group">
                 <label>Attack / Defense</label>
-                <div class="ad-group" id="ad-group">
-                    <button class="ad-btn" data-val="Attack">Attack</button>
-                    <button class="ad-btn" data-val="Defense">Defense</button>
-                    <button class="ad-btn" data-val="Attack Attack">Attack Attack</button>
+                <div class="atk-def-group" id="atk-def-group">
+                    <button class="atk-def-btn" data-val="Attack">Attack</button>
+                    <button class="atk-def-btn" data-val="Defense">Defense</button>
+                    <button class="atk-def-btn" data-val="Attack Attack">Attack Attack</button>
                 </div>
             </div>
         </div>
@@ -903,7 +903,7 @@
             // Attack/Defense Buttons
             // ============================================================
             function setupADButtons() {
-                document.querySelectorAll('#ad-group .ad-btn').forEach(btn => {
+                document.querySelectorAll('#atk-def-group .atk-def-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
                         if (btn.classList.contains('auto')) return;
                         setAD(btn.dataset.val, false);
@@ -913,7 +913,7 @@
 
             function setAD(val, isAuto) {
                 selectedAD = val;
-                document.querySelectorAll('#ad-group .ad-btn').forEach(b => {
+                document.querySelectorAll('#atk-def-group .atk-def-btn').forEach(b => {
                     b.classList.remove('selected', 'auto');
                     if (b.dataset.val === val) {
                         b.classList.add('selected');
