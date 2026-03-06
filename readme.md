@@ -2,7 +2,7 @@
 
 This is a private Overwatch stats dashboard for me and my friends. It’s tailored to our sheet format and hosting setup and is not meant as a reusable framework. The public, general-purpose version lives in a different repository. 
 
-Feel free to take a look at : https://retrac.pythonanywhere.com/ 
+Feel free to take a look at : https://ow-stats-private.onrender.com/ 
 
 Key points:
 - Private codebase, opinionated to our data and workflow.
