@@ -29,7 +29,6 @@ firebase-credentials.json
 # Legacy/untracked helper files (ignore if they reappear locally)
 assets_utils.py
 branding.py
-i18n.py
 patchnotes_utils.py
 sessions.py
 scripts/cloudflare_worker.js
