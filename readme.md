@@ -4,6 +4,8 @@ Private Overwatch dashboard for our friend group. Built with Dash/Plotly, hosted
 
 **Live:** https://ow-stats-private.onrender.com/
 
+<img width="1697" alt="dashboard_screen" src="dashboard_screen.png" />
+
 ---
 
 ## What it does
