@@ -8,6 +8,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.8"
+      - key: PYTHONPATH
+        value: /opt/render/project/src
       - key: INPUT_PIN
         sync: false  # set manually in Render dashboard
       - key: REFRESH_TOKEN

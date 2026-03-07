@@ -10,7 +10,9 @@ import os
 PLAYERS: list[str] = ["Bobo", "Phil", "Steven", "Jaina"]
 
 # ── Security ───────────────────────────────────────────────────────────────
-INPUT_PIN: str = os.environ.get("INPUT_PIN", "1337")
+INPUT_PIN: str = os.environ.get("INPUT_PIN", "")
+if not INPUT_PIN:
+    raise RuntimeError("Environment variable INPUT_PIN is not set.")
 
 # ── Data ───────────────────────────────────────────────────────────────────
 LOCAL_DATA_FILE: str = "local_data.jsonl"
