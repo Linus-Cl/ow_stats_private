@@ -1,10 +1,10 @@
+<img width="1697" alt="dashboard_screen" src="dashboard_screen.png" />
+
 # Overwatch Stats (Private)
 
 Private Overwatch dashboard for our friend group. Built with Dash/Plotly, hosted on Render.com.
 
 **Live:** https://ow-stats-private.onrender.com/
-
-<img width="1697" alt="dashboard_screen" src="dashboard_screen.png" />
 
 ---
 
