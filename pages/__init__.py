@@ -1,3 +1,1 @@
-"""
-pages/__init__.py
-"""
+"""Pages package — each module exposes ``register_callbacks(app)``."""

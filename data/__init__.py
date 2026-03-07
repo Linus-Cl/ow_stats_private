@@ -1,3 +1,1 @@
-"""
-data/__init__.py
-"""
+"""data package – data loading, caching, and cross-worker state."""

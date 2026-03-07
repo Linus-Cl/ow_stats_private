@@ -146,9 +146,9 @@ def migrate():
     df.columns = df.columns.map(lambda c: str(c).strip())
     print(f"   {len(df)} Zeilen geladen, Spalten: {list(df.columns[:8])}...")
 
-    import constants
+    import config
 
-    players = constants.players
+    players = config.PLAYERS
 
     # ---- Konvertieren ----
     print("🔄 Konvertiere Zeilen...")
