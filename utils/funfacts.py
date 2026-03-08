@@ -22,10 +22,32 @@ import pandas as pd
 import config
 from utils.filters import is_valid_hero
 
+# ---------------------------------------------------------------------------
+# Module-level cache: (n_rows, max_match_id, lang) → list[str]
+# Recomputed only when the DataFrame changes (new data loaded).
+# ---------------------------------------------------------------------------
+_facts_cache: dict[tuple, list[str]] = {}
+
+
+def _cache_key(df: pd.DataFrame, lang: str) -> tuple:
+    n = len(df)
+    max_id = int(df["Match ID"].max()) if ("Match ID" in df.columns and n > 0) else 0
+    return (n, max_id, lang)
+
 
 def get_random_fact(df: pd.DataFrame, lang: str) -> Optional[str]:
-    """Return a random fun-fact string, or None if the df is too small."""
-    facts = _collect_facts(df, lang)
+    """Return a random fun-fact string, or None if the df is too small.
+
+    Results are cached per (row-count, latest-match-id, language) so the
+    expensive computation only runs once after each data reload.
+    """
+    key = _cache_key(df, lang)
+    if key not in _facts_cache:
+        # Evict stale entries for the same lang to avoid unbounded growth
+        for old_key in [k for k in _facts_cache if k[2] == lang]:
+            del _facts_cache[old_key]
+        _facts_cache[key] = _collect_facts(df, lang)
+    facts = _facts_cache[key]
     return random.choice(facts) if facts else None
 
 
@@ -257,31 +279,34 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
                 )
             )
 
-    # ── Hero duo synergy ─────────────────────────────────────────────────────
+    # ── Hero duo synergy (vectorised — no iterrows) ─────────────────────────
     hero_cols = [f"{p} Hero" for p in config.PLAYERS if f"{p} Hero" in d.columns]
+    player_names_duo = [c.replace(" Hero", "") for c in hero_cols]
     if len(hero_cols) >= 2:
-        duo_wins: dict = {}
-        duo_total: dict = {}
-        for _, row in d.iterrows():
-            active_heroes = [
-                (col.replace(" Hero", ""), str(row[col]))
-                for col in hero_cols
-                if is_valid_hero(str(row[col]))
-            ]
-            for (p1, h1), (p2, h2) in combinations(active_heroes, 2):
-                key = tuple(sorted([f"{p1}:{h1}", f"{p2}:{h2}"]))
-                duo_total[key] = duo_total.get(key, 0) + 1
-                if row["_win"]:
-                    duo_wins[key] = duo_wins.get(key, 0) + 1
+        duo_total: dict[str, int] = {}
+        duo_wins_d: dict[str, int] = {}
+        for (p1, c1), (p2, c2) in combinations(zip(player_names_duo, hero_cols), 2):
+            v1 = d[c1].astype(str).map(is_valid_hero)
+            v2 = d[c2].astype(str).map(is_valid_hero)
+            sub = d.loc[v1 & v2, [c1, c2, "_win"]]
+            if sub.empty:
+                continue
+            # Vectorised key: "P1:Hero1|P2:Hero2" — p1 always sorted before p2
+            # because combinations() preserves insertion order
+            key_ser = p1 + ":" + sub[c1].astype(str) + "|" + p2 + ":" + sub[c2].astype(str)
+            grp = sub.groupby(key_ser.values)["_win"].agg(total="count", wins="sum")
+            for key_str, grow in grp.iterrows():
+                duo_total[key_str] = duo_total.get(key_str, 0) + int(grow["total"])
+                duo_wins_d[key_str] = duo_wins_d.get(key_str, 0) + int(grow["wins"])
 
         duo_wr_map = {
-            k: duo_wins.get(k, 0) / v for k, v in duo_total.items() if v >= 15
+            k: duo_wins_d.get(k, 0) / v for k, v in duo_total.items() if v >= 15
         }
         if duo_wr_map:
-            best_key = max(duo_wr_map, key=duo_wr_map.get)
-            best_wr = duo_wr_map[best_key] * 100
-            best_n = duo_total[best_key]
-            p1_str, p2_str = best_key
+            best_key_str = max(duo_wr_map, key=duo_wr_map.get)
+            best_wr = duo_wr_map[best_key_str] * 100
+            best_n = duo_total[best_key_str]
+            p1_str, p2_str = best_key_str.split("|")
             p1_name, h1 = p1_str.split(":", 1)
             p2_name, h2 = p2_str.split(":", 1)
             if best_wr >= 70:
@@ -447,9 +472,10 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
     # ── 4-stack paradox (all 4 players present = lower WR?) ─────────────────
     hero_cols_all = [f"{p} Hero" for p in config.PLAYERS if f"{p} Hero" in d.columns]
     if len(hero_cols_all) >= 3:
-        full_mask = d.apply(
-            lambda r: all(is_valid_hero(str(r[col])) for col in hero_cols_all), axis=1
-        )
+        # Vectorised: per-column boolean & instead of row-wise apply()
+        full_mask = pd.Series(True, index=d.index)
+        for _hc in hero_cols_all:
+            full_mask = full_mask & d[_hc].astype(str).map(is_valid_hero)
         full_wr = d[full_mask]["_win"].mean() * 100 if full_mask.sum() >= 30 else None
         part_wr = d[~full_mask]["_win"].mean() * 100 if (~full_mask).sum() >= 30 else None
         if full_wr is not None and part_wr is not None:
