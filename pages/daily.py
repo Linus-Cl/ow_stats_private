@@ -8,12 +8,13 @@ player lineup, and a visual match timeline.
 
 from __future__ import annotations
 
+import bisect
 import os
 import re
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, dcc, html, no_update
+from dash import Input, Output, State, MATCH, ctx, dcc, html, no_update
 
 import config
 from data import loader
@@ -129,6 +130,34 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         losses = total_games - wins
         wr = (wins / total_games * 100.0) if total_games else 0.0
 
+        # ── Prev / next active day ──────────────────────────────────────
+        active_days = sorted(
+            dff.dropna(subset=["Datum"])["Datum"].dt.normalize().unique().tolist()
+        )
+        try:
+            cur_idx = bisect.bisect_left(active_days, target_day)
+            # bisect_left finds insertion point; handle exact match
+            if cur_idx < len(active_days) and active_days[cur_idx] == target_day:
+                prev_date = (
+                    active_days[cur_idx - 1].date().isoformat() if cur_idx > 0 else None
+                )
+                next_date = (
+                    active_days[cur_idx + 1].date().isoformat()
+                    if cur_idx < len(active_days) - 1
+                    else None
+                )
+            else:
+                prev_date = (
+                    active_days[cur_idx - 1].date().isoformat() if cur_idx > 0 else None
+                )
+                next_date = (
+                    active_days[cur_idx].date().isoformat()
+                    if cur_idx < len(active_days)
+                    else None
+                )
+        except Exception:
+            prev_date = next_date = None
+
         # ── Top map ────────────────────────────────────────────────────────
         top_map = _find_top_map(dff_day, lang)
         top_map_wr = None
@@ -156,6 +185,8 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                     losses,
                     wr,
                     lang,
+                    prev_date=prev_date,
+                    next_date=next_date,
                 )
             )
         else:
@@ -277,6 +308,9 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         ]
         return summary, content
 
+    _toggle_hero_breakdown_callback(app)
+    _register_nav_callback(app)
+
 
 # ---------------------------------------------------------------------------
 # Private helpers (extracted for readability, not complexity reduction)
@@ -333,8 +367,50 @@ def _build_map_banner(
     losses,
     wr,
     lang,
+    prev_date=None,
+    next_date=None,
 ):
-    return html.Div(
+    def _nav_btn(label, date_iso, btn_id):
+        """Kleiner Navigationsbutton mit Datums-Label."""
+        _base = {
+            "background": "transparent",
+            "border": "1px solid rgba(150,150,150,0.35)",
+            "borderRadius": "6px",
+            "color": "#9ca3af",
+            "padding": "3px 10px",
+            "fontSize": "0.82rem",
+            "lineHeight": "1.4",
+            "cursor": "pointer",
+            "transition": "background 0.15s",
+        }
+        _disabled = {
+            **_base,
+            "opacity": "0.28",
+            "cursor": "default",
+            "pointerEvents": "none",
+        }
+        if date_iso:
+            try:
+                import datetime as _dt
+
+                d = _dt.date.fromisoformat(date_iso)
+                date_label = (
+                    d.strftime("%d.%m.%y") if lang == "de" else d.strftime("%Y-%m-%d")
+                )
+            except Exception:
+                date_label = date_iso
+        else:
+            date_label = ""
+        text = f"{label} {date_label}" if date_label else label
+        return html.Button(
+            text,
+            id=btn_id,
+            n_clicks=0,
+            disabled=not bool(date_iso),
+            style=_base if date_iso else _disabled,
+        )
+
+    banner = html.Div(
         [
             html.Div(
                 [
@@ -444,6 +520,20 @@ def _build_map_banner(
             "boxShadow": "0 8px 24px rgba(0,0,0,0.35)",
         },
     )
+    nav_row = html.Div(
+        [
+            _nav_btn("←", prev_date, "daily-prev-btn"),
+            _nav_btn("→", next_date, "daily-next-btn"),
+        ],
+        style={
+            "display": "flex",
+            "justifyContent": "space-between",
+            "marginTop": "6px",
+            "paddingLeft": "2px",
+            "paddingRight": "2px",
+        },
+    )
+    return html.Div([banner, nav_row])
 
 
 def _hero_spotlight_card(top_hero, top_hero_wr, top_hero_games, lang):
@@ -542,11 +632,26 @@ def _compute_player_rows(dff_day, hero_cols, lang):
 
         hero_col = f"{p} Hero"
         top_hero_p = None
+        hero_stats_list: list[dict] = []
         if hero_col in sub.columns:
-            h = sub[hero_col].dropna().astype(str)
-            h = h[h.map(is_valid_hero)]
-            if not h.empty:
-                top_hero_p = h.value_counts().idxmax()
+            h_vals = sub[hero_col].astype(str)
+            valid_mask = h_vals.map(is_valid_hero)
+            h_valid_sub = sub[valid_mask]
+            if not h_valid_sub.empty:
+                top_hero_p = h_vals[valid_mask].value_counts().idxmax()
+                for hero_name, h_grp in h_valid_sub.groupby(h_vals[valid_mask]):
+                    g = len(h_grp)
+                    w = int(h_grp["_win"].sum())
+                    hero_stats_list.append(
+                        {
+                            "hero": hero_name,
+                            "games": g,
+                            "wins": w,
+                            "losses": g - w,
+                            "wr": round(w / g * 100, 1) if g else 0.0,
+                        }
+                    )
+                hero_stats_list.sort(key=lambda x: x["games"], reverse=True)
 
         rows.append(
             {
@@ -558,6 +663,7 @@ def _compute_player_rows(dff_day, hero_cols, lang):
                 "roles": roles_p,
                 "role_wr": role_wr_map,
                 "top_hero": top_hero_p,
+                "hero_stats": hero_stats_list,
             }
         )
     return rows
@@ -836,45 +942,192 @@ def _build_lineup_cards(player_rows, lang):
                 for role in r["roles"]
             ]
 
+        # ── Hero breakdown (collapsible) ─────────────────────────────────────
+        hero_stats = r.get("hero_stats") or []
+        hero_rows_ui = []
+        for hs in hero_stats:
+            wr_c = (
+                "#4caf50" if hs["wr"] >= 56 else "#ef5350" if hs["wr"] < 44 else "#888"
+            )
+            hero_rows_ui.append(
+                html.Div(
+                    [
+                        html.Img(
+                            src=get_hero_image_url(hs["hero"]),
+                            style={
+                                "width": "26px",
+                                "height": "26px",
+                                "borderRadius": "50%",
+                                "objectFit": "cover",
+                                "flexShrink": "0",
+                            },
+                        ),
+                        html.Span(
+                            hs["hero"],
+                            style={
+                                "flex": "1",
+                                "fontSize": "0.82rem",
+                                "paddingLeft": "8px",
+                            },
+                        ),
+                        html.Span(
+                            f"{hs['wins']}W\u2013{hs['losses']}L",
+                            style={
+                                "fontSize": "0.78rem",
+                                "color": wr_c,
+                                "minWidth": "52px",
+                                "textAlign": "right",
+                                "fontVariantNumeric": "tabular-nums",
+                            },
+                        ),
+                        html.Span(
+                            f"{hs['wr']:.0f}%",
+                            style={
+                                "fontSize": "0.78rem",
+                                "color": wr_c,
+                                "minWidth": "34px",
+                                "textAlign": "right",
+                                "paddingLeft": "6px",
+                                "fontVariantNumeric": "tabular-nums",
+                            },
+                        ),
+                    ],
+                    className="d-flex align-items-center py-1",
+                    style={"borderBottom": "1px solid rgba(128,128,128,0.1)"},
+                )
+            )
+
+        collapse_section = html.Div()
+        if hero_stats:
+            collapse_id = {"type": "hero-collapse", "player": r["player"]}
+            toggle_id = {"type": "hero-toggle", "player": r["player"]}
+            collapse_section = html.Div(
+                [
+                    html.Hr(className="my-2", style={"opacity": "0.15"}),
+                    dbc.Button(
+                        tr("hero_breakdown", lang),
+                        id=toggle_id,
+                        color="link",
+                        size="sm",
+                        className="p-0 text-muted",
+                        style={"textDecoration": "none", "fontSize": "0.78rem"},
+                        n_clicks=0,
+                    ),
+                    dbc.Collapse(
+                        html.Div(hero_rows_ui, className="mt-2"),
+                        id=collapse_id,
+                        is_open=False,
+                    ),
+                ]
+            )
+
         cards.append(
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
-                        html.Div(
-                            [
-                                html.Img(
-                                    src=(
-                                        get_hero_image_url(r["top_hero"])
-                                        if r.get("top_hero")
-                                        else "/assets/heroes/default_hero.png"
-                                    ),
-                                    style={
-                                        "width": "54px",
-                                        "height": "54px",
-                                        "borderRadius": "50%",
-                                        "objectFit": "cover",
-                                        "marginRight": "12px",
-                                    },
-                                ),
-                                html.Div(
-                                    [
-                                        html.Div(html.Strong(r["player"])),
-                                        html.Div(badges, className="mb-1"),
-                                        html.Small(
-                                            f"{tr('games', lang)}: {r['games']} • {r['wins']}-{r['losses']} • {tr('winrate', lang)} {r['wr']:.1f}%",
-                                            className="text-muted",
+                        [
+                            html.Div(
+                                [
+                                    html.Img(
+                                        src=(
+                                            get_hero_image_url(r["top_hero"])
+                                            if r.get("top_hero")
+                                            else "/assets/heroes/default_hero.png"
                                         ),
-                                    ]
-                                ),
-                            ],
-                            className="d-flex align-items-center",
-                        )
+                                        style={
+                                            "width": "54px",
+                                            "height": "54px",
+                                            "borderRadius": "50%",
+                                            "objectFit": "cover",
+                                            "marginRight": "12px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(html.Strong(r["player"])),
+                                            html.Div(badges, className="mb-1"),
+                                            html.Small(
+                                                f"{tr('games', lang)}: {r['games']} \u2022 {r['wins']}-{r['losses']} \u2022 {tr('winrate', lang)} {r['wr']:.1f}%",
+                                                className="text-muted",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="d-flex align-items-center",
+                            ),
+                            collapse_section,
+                        ]
                     )
                 ),
                 md=4,
             )
         )
     return cards
+
+
+def _toggle_hero_breakdown_callback(app) -> None:
+    """Register the pattern-matching callback that toggles hero-breakdown collapses."""
+
+    @app.callback(
+        Output({"type": "hero-collapse", "player": MATCH}, "is_open"),
+        Input({"type": "hero-toggle", "player": MATCH}, "n_clicks"),
+        State({"type": "hero-collapse", "player": MATCH}, "is_open"),
+        prevent_initial_call=True,
+    )
+    def _toggle(n_clicks, is_open):
+        if n_clicks:
+            return not is_open
+        return is_open
+
+
+def _register_nav_callback(app) -> None:
+    """Prev / next day navigation via the arrow buttons in the banner."""
+
+    @app.callback(
+        Output("daily-date", "date", allow_duplicate=True),
+        Input("daily-prev-btn", "n_clicks"),
+        Input("daily-next-btn", "n_clicks"),
+        State("daily-date", "date"),
+        prevent_initial_call=True,
+    )
+    def _nav(prev_clicks, next_clicks, current_date):
+        triggered = ctx.triggered_id
+        if triggered not in ("daily-prev-btn", "daily-next-btn"):
+            return no_update
+
+        df = loader.get_df()
+        if df.empty or "Datum" not in df.columns:
+            return no_update
+
+        active_days = sorted(
+            df.dropna(subset=["Datum"])["Datum"].dt.normalize().unique().tolist()
+        )
+        if not active_days:
+            return no_update
+
+        try:
+            if current_date:
+                target = pd.to_datetime(current_date).normalize()
+            else:
+                target = active_days[-1]
+
+            idx = bisect.bisect_left(active_days, target)
+            if idx < len(active_days) and active_days[idx] == target:
+                if triggered == "daily-prev-btn":
+                    if idx > 0:
+                        return active_days[idx - 1].date().isoformat()
+                else:
+                    if idx < len(active_days) - 1:
+                        return active_days[idx + 1].date().isoformat()
+            else:
+                # Edge case: current date has no games, snap to nearest
+                if triggered == "daily-prev-btn" and idx > 0:
+                    return active_days[idx - 1].date().isoformat()
+                elif triggered == "daily-next-btn" and idx < len(active_days):
+                    return active_days[idx].date().isoformat()
+        except Exception:
+            pass
+        return no_update
 
 
 def _build_timeline(dff_day, target_day, today, lang):

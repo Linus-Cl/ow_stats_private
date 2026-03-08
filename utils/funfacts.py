@@ -293,7 +293,9 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
                 continue
             # Vectorised key: "P1:Hero1|P2:Hero2" — p1 always sorted before p2
             # because combinations() preserves insertion order
-            key_ser = p1 + ":" + sub[c1].astype(str) + "|" + p2 + ":" + sub[c2].astype(str)
+            key_ser = (
+                p1 + ":" + sub[c1].astype(str) + "|" + p2 + ":" + sub[c2].astype(str)
+            )
             grp = sub.groupby(key_ser.values)["_win"].agg(total="count", wins="sum")
             for key_str, grow in grp.iterrows():
                 duo_total[key_str] = duo_total.get(key_str, 0) + int(grow["total"])
@@ -458,7 +460,11 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
             busiest_n = int(day_game_counts.max())
             if busiest_n >= 20:
                 day_num = busiest_day.day
-                busiest_str = busiest_day.strftime("%d.%m.%Y") if lang == "de" else f"{busiest_day.strftime('%B')} {day_num}, {busiest_day.year}"
+                busiest_str = (
+                    busiest_day.strftime("%d.%m.%Y")
+                    if lang == "de"
+                    else f"{busiest_day.strftime('%B')} {day_num}, {busiest_day.year}"
+                )
                 facts.append(
                     _L(
                         f"On {busiest_str} you played {busiest_n} games in a single day. "
@@ -477,7 +483,9 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
         for _hc in hero_cols_all:
             full_mask = full_mask & d[_hc].astype(str).map(is_valid_hero)
         full_wr = d[full_mask]["_win"].mean() * 100 if full_mask.sum() >= 30 else None
-        part_wr = d[~full_mask]["_win"].mean() * 100 if (~full_mask).sum() >= 30 else None
+        part_wr = (
+            d[~full_mask]["_win"].mean() * 100 if (~full_mask).sum() >= 30 else None
+        )
         if full_wr is not None and part_wr is not None:
             diff4 = part_wr - full_wr
             if diff4 >= 2:
@@ -550,13 +558,23 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
 
     # ── Worst map in a specific gamemode ────────────────────────────────────
     if "Gamemode" in d.columns and "Map" in d.columns:
-        gm_map_counts = d.groupby([d["Gamemode"].astype(str), d["Map"].astype(str)]).size()
+        gm_map_counts = d.groupby(
+            [d["Gamemode"].astype(str), d["Map"].astype(str)]
+        ).size()
         gm_map_wr = (
-            d.groupby([d["Gamemode"].astype(str), d["Map"].astype(str)])["_win"].mean() * 100
+            d.groupby([d["Gamemode"].astype(str), d["Map"].astype(str)])["_win"].mean()
+            * 100
         )
         worst_map_facts = []
         for gm in ["Escort", "Hybrid"]:
-            sub_counts = gm_map_counts.get(gm, pd.Series(dtype=int) if not isinstance(gm_map_counts.get(gm, None), pd.Series) else gm_map_counts[gm])
+            sub_counts = gm_map_counts.get(
+                gm,
+                (
+                    pd.Series(dtype=int)
+                    if not isinstance(gm_map_counts.get(gm, None), pd.Series)
+                    else gm_map_counts[gm]
+                ),
+            )
             try:
                 sub_wr = gm_map_wr[gm]
                 sub_c = gm_map_counts[gm]
@@ -588,17 +606,39 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
 
     # ── Seasonal pattern (best vs worst month) ───────────────────────────────
     if "Monat" in d.columns:
-        _MONTHS_EN = {1:"January",2:"February",3:"March",4:"April",5:"May",6:"June",
-                      7:"July",8:"August",9:"September",10:"October",11:"November",12:"December"}
-        _MONTHS_DE = {1:"Januar",2:"Februar",3:"März",4:"April",5:"Mai",6:"Juni",
-                      7:"Juli",8:"August",9:"September",10:"Oktober",11:"November",12:"Dezember"}
+        _MONTHS_EN = {
+            1: "January",
+            2: "February",
+            3: "March",
+            4: "April",
+            5: "May",
+            6: "June",
+            7: "July",
+            8: "August",
+            9: "September",
+            10: "October",
+            11: "November",
+            12: "December",
+        }
+        _MONTHS_DE = {
+            1: "Januar",
+            2: "Februar",
+            3: "März",
+            4: "April",
+            5: "Mai",
+            6: "Juni",
+            7: "Juli",
+            8: "August",
+            9: "September",
+            10: "Oktober",
+            11: "November",
+            12: "Dezember",
+        }
         mon_counts = d["Monat"].value_counts()
         eligible_mon = mon_counts[mon_counts >= 50].index
         if len(eligible_mon) >= 4:
             mon_wr = (
-                d[d["Monat"].isin(eligible_mon)]
-                .groupby(d["Monat"])["_win"]
-                .mean()
+                d[d["Monat"].isin(eligible_mon)].groupby(d["Monat"])["_win"].mean()
                 * 100
             )
             best_mon = int(mon_wr.idxmax())
@@ -653,7 +693,10 @@ def _collect_facts(df: pd.DataFrame, lang: str) -> list[str]:  # noqa: C901
         sub_p = active_p[active_p[hero_col].astype(str).isin(eligible_h)]
         hero_wr_p = sub_p.groupby(sub_p[hero_col].astype(str))["_win"].mean() * 100
         best_h_p = hero_wr_p.idxmax()
-        if best_h_p != most_played_h and hero_wr_p[best_h_p] - hero_wr_p.get(most_played_h, 0) >= 8:
+        if (
+            best_h_p != most_played_h
+            and hero_wr_p[best_h_p] - hero_wr_p.get(most_played_h, 0) >= 8
+        ):
             mp_wr = hero_wr_p.get(most_played_h)
             if mp_wr is not None:
                 facts.append(
