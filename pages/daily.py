@@ -27,6 +27,7 @@ from utils.formatting import (
     parse_time,
 )
 from utils.i18n import tr
+from utils.funfacts import get_random_fact
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +224,33 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         # ── Timeline ───────────────────────────────────────────────────────
         timeline = _build_timeline(dff_day, target_day, today, lang)
 
+        # ── Fun Fact ───────────────────────────────────────────────────────
+        fun_fact_text = get_random_fact(dff, lang)
+        fun_fact_card = (
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Span(
+                            tr("fun_fact", lang),
+                            className="text-muted me-2",
+                            style={
+                                "fontSize": "0.75rem",
+                                "fontWeight": "600",
+                                "textTransform": "uppercase",
+                                "letterSpacing": "0.05em",
+                            },
+                        ),
+                        html.Span(fun_fact_text, style={"fontSize": "0.9rem"}),
+                    ],
+                    className="py-2 px-3",
+                ),
+                className="mt-3",
+                style={"borderLeft": "3px solid #fa9c1e"},
+            )
+            if fun_fact_text
+            else html.Div()
+        )
+
         # ── Assemble ───────────────────────────────────────────────────────
         summary = banner_children[0]
         content = [
@@ -231,6 +259,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                 if spotlight_cards
                 else html.Div()
             ),
+            fun_fact_card,
             html.H4(tr("lineup_today", lang), className="mt-4 mb-2"),
             (
                 dbc.Row(lineup_cards, className="g-3")
