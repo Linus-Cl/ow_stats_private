@@ -1094,6 +1094,11 @@ def _register_nav_callback(app) -> None:
         triggered = ctx.triggered_id
         if triggered not in ("daily-prev-btn", "daily-next-btn"):
             return no_update
+        # Guard: ignore re-mount events where n_clicks is 0/None (button was
+        # recreated by the data-refresh render, not actually clicked).
+        clicks = prev_clicks if triggered == "daily-prev-btn" else next_clicks
+        if not clicks:
+            return no_update
 
         df = loader.get_df()
         if df.empty or "Datum" not in df.columns:
