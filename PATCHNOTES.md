@@ -1,5 +1,38 @@
 # Patchnotes – Branch daily_report
 
+### 2026-03-08 — fun facts, daily navigation, hero breakdown, keyboard input overhaul
+
+**Fun Facts (Stats-Seite)**
+- A „Fun Facts"-Karte wurde zur Stats-Seite hinzugefügt – 25 nischige, datenbasierte Fakten (Duo-Combo, map-WR-Rekorde, Hero-Obsession, 4-Stack-Paradox, Monats-Geister, Gamemode-King u. v. m.).
+- Performance-Cache auf Modulebene: Die Berechnung erfolgt nur beim ersten Aufruf (cold ~120 ms), danach wird das Ergebnis wiederverwendet (warm ~0,01 ms; 60.000× schneller). Cache wird automatisch invalidiert, sobald neue Matches hinzukommen.
+- Duo-Combo und 4-Stack-Maske wurden vollständig vektorisiert (kein `iterrows` mehr).
+
+**Daily Report – Prev/Next-Navigation**
+- Unter dem Map-Banner erscheint nun eine schmale Navigationszeile mit zwei Pfeilen (`←` / `→`).
+- Der linke Pfeil springt zum vorherigen aktiven Spieltag, der rechte zum nächsten.
+- Buttons zeigen das Ziel-Datum an (DD.MM.YY / YYYY-MM-DD je nach Sprache) und sind ausgegraut, wenn kein Vortag/Folgetag existiert.
+
+**Daily Report – Aufklappbare Hero-Übersicht in Spielerkarten**
+- Jede Spielerkarte in der Lineup-Sektion hat nun einen „Gespielte Helden"-Button.
+- Beim Aufklappen erscheinen alle vom Spieler gespielten Heroes (sortiert nach Anzahl Spiele) mit Hero-Icon, Name, W–L-Bilanz und farbiger Winrate (grün ≥ 56 %, rot < 44 %, grau sonst).
+
+**Input – Vollständige Keyboard-Navigation**
+- Ergebnis (Win/Lose/Draw) und Attack/Defense müssen nicht mehr mit der Maus gewählt werden.
+- Unsichtbare, fokussierbare Text-Inputs übernehmen die Keyboard-Shortcuts; die visuellen Buttons bleiben voll per Maus nutzbar.
+- **Ergebnis:** `w` → Win, `l` → Lose, `d` → Draw, dann `Enter` zum Bestätigen und Weiterspringen.
+- **Attack/Defense:** `a` → Attack, `d` → Defense, dann `Enter`.
+- Live-Preview: Sobald eine Shortcut-Taste gedrückt wird, leuchtet der entsprechende Button auf – wechseln ist möglich, solange kein Enter gedrückt wurde.
+- **Attack Attack-Maps** (Flashpoint, Push etc.): Attack/Defense wird automatisch gesetzt und gesperrt; Attack- und Defense-Buttons werden ausgegraut, der AA-Shortcut-Input wird im Tab-Fokus übersprungen.
+- **Für alle anderen Maps**: Der „Attack Attack"-Button ist dauerhaft gesperrt und ausgegraut.
+- Attack/Defense ist jetzt ein Pflichtfeld – das Formular kann ohne Auswahl nicht abgeschickt werden.
+- M `assets/input.html`
+
+**Sonstiges**
+- A `scripts/excel_to_jsonl.py`: Neues Skript zum Exportieren von `ow_stats_export.xlsx` → `local_data.jsonl` ohne Firebase-Abhängigkeit.
+- M `utils/i18n.py`: Schlüssel `hero_breakdown` hinzugefügt (EN: „Heroes played", DE: „Gespielte Helden").
+
+---
+
 ### 2026-02-12 — season display rebrand + descending season dropdown
 - M app.py
 - Notes: Seasons 1–20 keep their original labels. Starting with raw season 21, labels now display as "YYYY: Season N" with 6 seasons per year (e.g., 21→2026: Season 1, 26→2026: Season 6, 27→2027: Season 1). Sorting and filtering still use the original season numbers from the data; only the UI labels changed. The season dropdown in the left sidebar is now sorted descending by season number.

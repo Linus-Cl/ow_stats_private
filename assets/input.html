@@ -340,6 +340,70 @@
             cursor: default
         }
 
+        /* Wenn die Gruppe gesperrt ist (Attack Attack-Gamemode) */
+        .atk-def-btn.locked {
+            opacity: .25;
+            cursor: not-allowed;
+            pointer-events: none
+        }
+
+        .atk-def-btn.locked.selected {
+            opacity: .55
+        }
+
+        /* --- Keyboard-focus ring on button groups --- */
+        .result-group.keyboard-focus,
+        .atk-def-group.keyboard-focus {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+            border-radius: var(--radius)
+        }
+
+        /* --- Keyboard preview (Taste gedrückt, noch kein Enter) --- */
+        .result-btn.preview-win {
+            border-color: var(--green);
+            background: rgba(34, 197, 94, .07);
+            color: var(--green);
+            opacity: .75
+        }
+
+        .result-btn.preview-lose {
+            border-color: var(--red);
+            background: rgba(239, 68, 68, .07);
+            color: var(--red);
+            opacity: .75
+        }
+
+        .result-btn.preview-draw {
+            border-color: var(--orange);
+            background: rgba(245, 158, 11, .07);
+            color: var(--orange);
+            opacity: .75
+        }
+
+        .atk-def-btn.preview {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, .07);
+            color: var(--accent);
+            opacity: .75
+        }
+
+        /* --- Hidden keyboard shortcut input (visually invisible, focusable) --- */
+        .sr-input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+            border: 0;
+            outline: 0;
+            background: transparent;
+            color: transparent
+        }
+
         /* --- Player Rows --- */
         .player-inputs {
             display: flex;
@@ -641,22 +705,28 @@
                 <input type="text" id="f-gamemode" readonly tabindex="-1" style="opacity:.6;cursor:default">
             </div>
             <div class="form-group">
-                <label>Ergebnis</label>
+                <label>Ergebnis <span style="font-size:11px;color:var(--text2);font-weight:400">(w / l / d +
+                        Enter)</span></label>
+                <input type="text" id="f-result" class="sr-input" tabindex="5" autocomplete="off"
+                    aria-label="Ergebnis: w=Win, l=Lose, d=Draw, dann Enter">
                 <div class="result-group" id="result-group">
-                    <button class="result-btn" data-val="Win" tabindex="5">Win</button>
-                    <button class="result-btn" data-val="Lose" tabindex="6">Lose</button>
-                    <button class="result-btn" data-val="Draw" tabindex="7">Draw</button>
+                    <button class="result-btn" data-val="Win" tabindex="-1">Win</button>
+                    <button class="result-btn" data-val="Lose" tabindex="-1">Lose</button>
+                    <button class="result-btn" data-val="Draw" tabindex="-1">Draw</button>
                 </div>
             </div>
         </div>
 
         <div class="form-grid" style="grid-template-columns:1fr">
             <div class="form-group">
-                <label>Attack / Defense</label>
+                <label>Attack / Defense <span style="font-size:11px;color:var(--text2);font-weight:400">(a / d +
+                        Enter)</span></label>
+                <input type="text" id="f-ad" class="sr-input" tabindex="6" autocomplete="off"
+                    aria-label="Attack/Defense: a=Attack, d=Defense, dann Enter">
                 <div class="atk-def-group" id="atk-def-group">
-                    <button class="atk-def-btn" data-val="Attack">Attack</button>
-                    <button class="atk-def-btn" data-val="Defense">Defense</button>
-                    <button class="atk-def-btn" data-val="Attack Attack">Attack Attack</button>
+                    <button class="atk-def-btn" data-val="Attack" tabindex="-1">Attack</button>
+                    <button class="atk-def-btn" data-val="Defense" tabindex="-1">Defense</button>
+                    <button class="atk-def-btn" data-val="Attack Attack" tabindex="-1">Attack Attack</button>
                 </div>
             </div>
         </div>
@@ -707,6 +777,7 @@
             let activePlayers = {};  // {name: bool}
             let selectedResult = '';
             let selectedAD = '';
+            let adLocked = false;   // true wenn Gamemode Attack Attack erzwingt
             let editingMatchId = null;  // null = new, number = editing
             let heroTabIndex = 10;
 
@@ -762,6 +833,8 @@
                 setupMapDropdown();
                 setupResultButtons();
                 setupADButtons();
+                setupResultKeyboardInput();
+                setupADKeyboardInput();
                 resetForm();
                 buildPlayerRows();
                 loadHistory();
@@ -854,8 +927,8 @@
                     } else {
                         setAD('', false);
                     }
-                    // Move focus to result
-                    document.querySelector('#result-group .result-btn')?.focus();
+                    // Move focus to result input
+                    document.getElementById('f-result')?.focus();
                 }
 
                 input.addEventListener('input', () => { render(input.value); list.classList.add('open'); });
@@ -885,10 +958,99 @@
             // ============================================================
             function setupResultButtons() {
                 document.querySelectorAll('#result-group .result-btn').forEach(btn => {
-                    btn.addEventListener('click', () => setResult(btn.dataset.val));
-                    btn.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter') { e.preventDefault(); setResult(btn.dataset.val); advanceFocus(btn); }
+                    btn.addEventListener('click', () => {
+                        setResult(btn.dataset.val);
+                        // Nach Mausklick: Focus auf das Hidden-Input legen
+                        document.getElementById('f-result').focus();
                     });
+                });
+            }
+
+            // ============================================================
+            // Keyboard-Shortcuts für Ergebnis (verstecktes Input)
+            // ============================================================
+            function setupResultKeyboardInput() {
+                const inp = document.getElementById('f-result');
+                const grp = document.getElementById('result-group');
+
+                function clearPreview() {
+                    grp.querySelectorAll('.result-btn').forEach(b =>
+                        b.classList.remove('preview-win', 'preview-lose', 'preview-draw'));
+                }
+                function applyPreview(v) {
+                    clearPreview();
+                    if (v === 'w') grp.querySelector('[data-val="Win"]')?.classList.add('preview-win');
+                    else if (v === 'l') grp.querySelector('[data-val="Lose"]')?.classList.add('preview-lose');
+                    else if (v === 'd') grp.querySelector('[data-val="Draw"]')?.classList.add('preview-draw');
+                }
+
+                inp.addEventListener('focus', () => { inp.value = ''; clearPreview(); grp.classList.add('keyboard-focus'); });
+                inp.addEventListener('blur', () => { inp.value = ''; clearPreview(); grp.classList.remove('keyboard-focus'); });
+
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const v = inp.value.trim().toLowerCase();
+                        if (v === 'w') setResult('Win');
+                        else if (v === 'l') setResult('Lose');
+                        else if (v === 'd') setResult('Draw');
+                        clearPreview();
+                        if (selectedResult) { inp.value = ''; advanceFocus(inp); }
+                        return;
+                    }
+                    // Shortcut-Tasten ersetzen vorherigen Wert und zeigen Preview
+                    if (['w', 'l', 'd'].includes(e.key.toLowerCase())) {
+                        e.preventDefault();
+                        inp.value = e.key.toLowerCase();
+                        applyPreview(inp.value);
+                        return;
+                    }
+                    // Alle anderen Tasten ignorieren
+                    e.preventDefault();
+                });
+            }
+
+            // ============================================================
+            // Keyboard-Shortcuts für Attack/Defense (verstecktes Input)
+            // ============================================================
+            function setupADKeyboardInput() {
+                const inp = document.getElementById('f-ad');
+                const grp = document.getElementById('atk-def-group');
+
+                function clearPreview() {
+                    grp.querySelectorAll('.atk-def-btn').forEach(b => b.classList.remove('preview'));
+                }
+                function applyPreview(v) {
+                    clearPreview();
+                    if (v === 'a') grp.querySelector('[data-val="Attack"]')?.classList.add('preview');
+                    else if (v === 'd') grp.querySelector('[data-val="Defense"]')?.classList.add('preview');
+                }
+
+                inp.addEventListener('focus', () => { inp.value = ''; clearPreview(); grp.classList.add('keyboard-focus'); });
+                inp.addEventListener('blur', () => { inp.value = ''; clearPreview(); grp.classList.remove('keyboard-focus'); });
+
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const v = inp.value.trim().toLowerCase();
+                        if (v === 'a') setAD('Attack', false);
+                        else if (v === 'd') setAD('Defense', false);
+                        clearPreview();
+                        inp.value = '';
+                        advanceFocus(inp);
+                        return;
+                    }
+                    // Shortcut-Tasten ersetzen vorherigen Wert und zeigen Preview
+                    if (['a', 'd'].includes(e.key.toLowerCase())) {
+                        e.preventDefault();
+                        inp.value = e.key.toLowerCase();
+                        applyPreview(inp.value);
+                        return;
+                    }
+                    // Alle anderen Tasten ignorieren
+                    e.preventDefault();
                 });
             }
 
@@ -905,19 +1067,39 @@
             function setupADButtons() {
                 document.querySelectorAll('#atk-def-group .atk-def-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
-                        if (btn.classList.contains('auto')) return;
+                        if (btn.classList.contains('auto') || btn.classList.contains('locked')) return;
                         setAD(btn.dataset.val, false);
+                        // Nach Mausklick: Focus auf das Hidden-Input legen
+                        document.getElementById('f-ad').focus();
                     });
                 });
             }
 
             function setAD(val, isAuto) {
                 selectedAD = val;
+                // Ist das ein Attack-Attack-Lock (Gamemode zwingt es)?
+                adLocked = isAuto && val === 'Attack Attack';
+                const fad = document.getElementById('f-ad');
+                // f-ad im keyboard-nav überspringen wenn locked
+                fad.setAttribute('tabindex', adLocked ? '-1' : '6');
+
                 document.querySelectorAll('#atk-def-group .atk-def-btn').forEach(b => {
-                    b.classList.remove('selected', 'auto');
-                    if (b.dataset.val === val) {
-                        b.classList.add('selected');
-                        if (isAuto) b.classList.add('auto');
+                    b.classList.remove('selected', 'auto', 'locked');
+                    if (adLocked) {
+                        // Attack Attack ist selected+auto, die anderen werden locked (ausgegraut)
+                        if (b.dataset.val === 'Attack Attack') {
+                            b.classList.add('selected', 'auto');
+                        } else {
+                            b.classList.add('locked');
+                        }
+                    } else {
+                        // Normaler Modus: 'Attack Attack'-Button immer locked (nicht wählbar)
+                        if (b.dataset.val === 'Attack Attack') {
+                            b.classList.add('locked');
+                        } else if (b.dataset.val === val) {
+                            b.classList.add('selected');
+                            if (isAuto) b.classList.add('auto');
+                        }
                     }
                 });
             }
@@ -1067,6 +1249,13 @@
 
                 if (!map || !selectedResult) {
                     showToast('Map und Ergebnis sind Pflichtfelder!', 'error');
+                    if (!selectedResult) document.getElementById('f-result')?.focus();
+                    return;
+                }
+
+                if (!selectedAD) {
+                    showToast('Attack / Defense muss gesetzt sein!', 'error');
+                    document.getElementById('f-ad')?.focus();
                     return;
                 }
 
@@ -1096,7 +1285,7 @@
                     map: map,
                     gamemode: gamemode,
                     result: selectedResult,
-                    attack_defense: selectedAD || 'N/A',
+                    attack_defense: selectedAD,
                     players: players,
                 };
 
