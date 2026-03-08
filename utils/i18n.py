@@ -118,6 +118,7 @@ T: dict[str, dict[str, str]] = {
     "no_games_selected":              {"en": "No games on selected day",               "de": "Keine Spiele am gewählten Tag"},
     "showing_last_active":            {"en": "Showing last active day",                "de": "Zeige letzten aktiven Tag"},
     "date_placeholder":               {"en": "Date",                                   "de": "Datum"},
+    "fun_fact":                       {"en": "Did you know?",                          "de": "Wusstest du?"},
 }
 # fmt: on
 
