@@ -35,11 +35,14 @@ def _cache_key(df: pd.DataFrame, lang: str) -> tuple:
     return (n, max_id, lang)
 
 
-def get_random_fact(df: pd.DataFrame, lang: str) -> Optional[str]:
-    """Return a random fun-fact string, or None if the df is too small.
+def get_random_fact(df: pd.DataFrame, lang: str, seed=None) -> Optional[str]:
+    """Return a (stable) random fun-fact string, or None if the df is too small.
 
     Results are cached per (row-count, latest-match-id, language) so the
     expensive computation only runs once after each data reload.
+
+    Pass *seed* (e.g. today's date as a string) to get a deterministic result
+    that stays constant across re-renders for the same day.
     """
     key = _cache_key(df, lang)
     if key not in _facts_cache:
@@ -48,7 +51,10 @@ def get_random_fact(df: pd.DataFrame, lang: str) -> Optional[str]:
             del _facts_cache[old_key]
         _facts_cache[key] = _collect_facts(df, lang)
     facts = _facts_cache[key]
-    return random.choice(facts) if facts else None
+    if not facts:
+        return None
+    rng = random.Random(seed)  # seed=None → non-deterministic (legacy behaviour)
+    return rng.choice(facts)
 
 
 # ---------------------------------------------------------------------------

@@ -53,7 +53,10 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         if active_tab != "tab-daily":
             return no_update, no_update
 
-        loader.reload()
+        # Only reload from disk/Firebase when the server signals new data.
+        # Avoids expensive I/O on every tab-switch, date change, or lang toggle.
+        if ctx.triggered_id == "server-update-token":
+            loader.reload()
         df = loader.get_df()
         if df.empty or "Datum" not in df.columns:
             return html.Div(tr("no_data", lang)), []
@@ -256,7 +259,9 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         timeline = _build_timeline(dff_day, target_day, today, lang)
 
         # ── Fun Fact ───────────────────────────────────────────────────────
-        fun_fact_text = get_random_fact(dff, lang)
+        # Seed with the current date so the fact is stable for the whole day
+        # and doesn't change on every data-poll re-render.
+        fun_fact_text = get_random_fact(dff, lang, seed=str(target_day.date()))
         fun_fact_card = (
             dbc.Card(
                 dbc.CardBody(
