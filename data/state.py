@@ -24,10 +24,19 @@ _local = threading.local()
 
 
 def _connect() -> sqlite3.Connection:
-    conn = getattr(_local, "conn", None)
-    if conn is None:
-        conn = sqlite3.connect(ACTIVE_DB, check_same_thread=False)
-        _local.conn = conn
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            # Connection was closed or broken – discard it.
+            try:
+                conn.close()
+            except Exception:
+                pass
+    conn = sqlite3.connect(ACTIVE_DB, check_same_thread=False)
+    _local.conn = conn
     return conn
 
 
@@ -36,27 +45,24 @@ def _connect() -> sqlite3.Connection:
 
 def init_db() -> None:
     conn = _connect()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS active_sessions (
-                session_id TEXT PRIMARY KEY,
-                last_seen  INTEGER
-            )
+    cur = conn.cursor()
+    cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS active_sessions (
+            session_id TEXT PRIMARY KEY,
+            last_seen  INTEGER
         )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_state (
-                key   TEXT PRIMARY KEY,
-                value TEXT
-            )
+    """
+    )
+    cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS app_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT
         )
-        conn.commit()
-    finally:
-        conn.close()
+    """
+    )
+    conn.commit()
 
 
 # ── Heartbeat / online counter ─────────────────────────────────────────────
