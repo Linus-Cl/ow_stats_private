@@ -14,7 +14,7 @@ import re
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, State, MATCH, ctx, dcc, html, no_update
+from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 import config
 from data import loader
@@ -46,9 +46,12 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         Input("lang-store", "data"),
         Input("daily-date", "date"),
         Input("server-update-token", "data"),
+        State("hero-collapse-states", "data"),
         prevent_initial_call=False,
     )
-    def render_daily_report(active_tab, lang_data, selected_date, _token):
+    def render_daily_report(
+        active_tab, lang_data, selected_date, _token, collapse_states
+    ):
         lang = (lang_data or {}).get("lang", "en")
         if active_tab != "tab-daily":
             return no_update, no_update
@@ -253,7 +256,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                 spotlight_cards.append(carry_card)
 
         # ── Player lineup ──────────────────────────────────────────────────
-        lineup_cards = _build_lineup_cards(player_rows, lang)
+        lineup_cards = _build_lineup_cards(player_rows, lang, collapse_states or {})
 
         # ── Timeline ───────────────────────────────────────────────────────
         timeline = _build_timeline(dff_day, target_day, today, lang)
@@ -906,7 +909,7 @@ def _hero_carry_card(dff_day, lang):
     )
 
 
-def _build_lineup_cards(player_rows, lang):
+def _build_lineup_cards(player_rows, lang, collapse_states: dict | None = None):
     role_color = {"Tank": "warning", "Damage": "danger", "Support": "success"}
     cards = []
     for r in player_rows:
@@ -1021,7 +1024,7 @@ def _build_lineup_cards(player_rows, lang):
                     dbc.Collapse(
                         html.Div(hero_rows_ui, className="mt-2"),
                         id=collapse_id,
-                        is_open=False,
+                        is_open=bool((collapse_states or {}).get(r["player"], False)),
                     ),
                 ]
             )
@@ -1071,18 +1074,58 @@ def _build_lineup_cards(player_rows, lang):
 
 
 def _toggle_hero_breakdown_callback(app) -> None:
-    """Register the pattern-matching callback that toggles hero-breakdown collapses."""
+    """Persist hero-breakdown open/close state in a Store AND directly
+    toggle the Collapse ``is_open`` property so the user sees an immediate
+    response.
+
+    Because ``render_daily_report`` recreates every Collapse from scratch on
+    each server-update-token tick (~5 s), we need *both* mechanisms:
+
+    1. **Store** – survives re-renders.  ``render_daily_report`` reads it as a
+       ``State`` and passes it to ``_build_lineup_cards`` which sets the
+       initial ``is_open`` on newly created Collapse components.
+    2. **Direct Output to Collapse.is_open** – gives the user instant visual
+       feedback on click *and* restores the stored open/close state whenever
+       Dash fires this callback because the pattern-matched components were
+       recreated (all ``n_clicks`` == 0).
+    """
 
     @app.callback(
-        Output({"type": "hero-collapse", "player": MATCH}, "is_open"),
-        Input({"type": "hero-toggle", "player": MATCH}, "n_clicks"),
-        State({"type": "hero-collapse", "player": MATCH}, "is_open"),
+        Output("hero-collapse-states", "data"),
+        Output({"type": "hero-collapse", "player": ALL}, "is_open"),
+        Input({"type": "hero-toggle", "player": ALL}, "n_clicks"),
+        State("hero-collapse-states", "data"),
         prevent_initial_call=True,
     )
-    def _toggle(n_clicks, is_open):
-        if n_clicks:
-            return not is_open
-        return is_open
+    def _toggle(all_clicks, states):
+        states = dict(states or {})
+        triggered = ctx.triggered_id
+
+        # --- Real click: toggle the state for the clicked player -----------
+        is_real_click = (
+            triggered is not None
+            and isinstance(triggered, dict)
+            and any(c for c in (all_clicks or []) if c)
+        )
+
+        if is_real_click:
+            player = triggered["player"]
+            states[player] = not states.get(player, False)
+
+        # --- Build is_open list for every currently rendered Collapse ------
+        inputs_list = ctx.inputs_list[0]  # list of dicts with "id" keys
+        is_open_values = [
+            states.get(item["id"]["player"], False) for item in inputs_list
+        ]
+
+        if is_real_click:
+            return states, is_open_values
+
+        # Component recreation (server update, tab switch, etc.):
+        # Don't write back to the store (nothing changed), but DO push the
+        # stored is_open values into the freshly created Collapse components
+        # so they stay in sync with the persisted state.
+        return no_update, is_open_values
 
 
 def _register_nav_callback(app) -> None:

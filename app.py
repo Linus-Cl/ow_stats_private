@@ -55,6 +55,7 @@ app.layout = html.Div(
         dcc.Store(id="lang-store", data={"lang": "en"}, storage_type="local"),
         dcc.Store(id="client-id", storage_type="session"),
         dcc.Store(id="server-update-token", storage_type="memory"),
+        dcc.Store(id="hero-collapse-states", data={}, storage_type="session"),
         html.Div(id="theme-body-sync", style={"display": "none"}),
         html.Div(id="dummy-scroll-ack", style={"display": "none"}),
         html.Div(id="heartbeat-dummy", style={"display": "none"}),
