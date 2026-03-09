@@ -56,6 +56,7 @@ app.layout = html.Div(
         dcc.Store(id="client-id", storage_type="session"),
         dcc.Store(id="server-update-token", storage_type="memory"),
         dcc.Store(id="hero-collapse-states", data={}, storage_type="session"),
+        dcc.Store(id="daily-render-fingerprint", data="", storage_type="memory"),
         html.Div(id="theme-body-sync", style={"display": "none"}),
         html.Div(id="dummy-scroll-ack", style={"display": "none"}),
         html.Div(id="heartbeat-dummy", style={"display": "none"}),
@@ -1101,7 +1102,6 @@ def _sync_datepicker_bounds(_lang_data):
     Input("server-update-token", "data"),
 )
 def update_filter_options(_, _token):
-    loader.reload()
     df = loader.get_df()
     if df.empty:
         return [], [], []
@@ -1180,10 +1180,6 @@ def update_data(_n_intervals):
 def poll_server_update_token(_n, current_token):
     token = state.get_app_state("data_token") or ""
     if token != (current_token or ""):
-        try:
-            loader.reload()
-        except Exception as exc:
-            print(f"[Poll] reload warning: {exc}")
         return token
     if not current_token:
         return token

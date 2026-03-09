@@ -7,6 +7,7 @@ All paths are returned as Dash-compatible ``/assets/…`` URLs.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import unicodedata
@@ -38,6 +39,7 @@ _IMG_EXTS = ("png", "jpg", "jpeg", "webp", "svg")
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=256)
 def get_map_image_url(map_name: str) -> str:
     """Return the ``/assets/maps/<file>`` URL for *map_name* (case-insensitive, accent-safe)."""
     if not isinstance(map_name, str):
@@ -57,6 +59,7 @@ def get_map_image_url(map_name: str) -> str:
     return "/assets/maps/default.png"
 
 
+@functools.lru_cache(maxsize=512)
 def get_hero_image_url(hero_name: str) -> str:
     """Return the ``/assets/heroes/<file>`` URL for *hero_name* (fuzzy matching)."""
     if not isinstance(hero_name, str):

@@ -19,7 +19,7 @@ from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 import config
 from data import loader
 from utils.assets import get_hero_image_url, get_map_image_url
-from utils.filters import is_valid_hero
+from utils.filters import is_valid_hero, is_valid_hero_series
 from utils.formatting import (
     compose_datetime,
     format_duration_display,
@@ -42,19 +42,21 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
     @app.callback(
         Output("daily-summary", "children"),
         Output("daily-report-container", "children"),
+        Output("daily-render-fingerprint", "data"),
         Input("tabs", "active_tab"),
         Input("lang-store", "data"),
         Input("daily-date", "date"),
         Input("server-update-token", "data"),
         State("hero-collapse-states", "data"),
+        State("daily-render-fingerprint", "data"),
         prevent_initial_call=False,
     )
     def render_daily_report(
-        active_tab, lang_data, selected_date, _token, collapse_states
+        active_tab, lang_data, selected_date, _token, collapse_states, prev_fingerprint
     ):
         lang = (lang_data or {}).get("lang", "en")
         if active_tab != "tab-daily":
-            return no_update, no_update
+            return no_update, no_update, no_update
 
         # Only reload from disk/Firebase when the server signals new data.
         # Avoids expensive I/O on every tab-switch, date change, or lang toggle.
@@ -62,7 +64,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
             loader.reload()
         df = loader.get_df()
         if df.empty or "Datum" not in df.columns:
-            return html.Div(tr("no_data", lang)), []
+            return html.Div(tr("no_data", lang)), [], ""
 
         dff = df
 
@@ -89,7 +91,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
 
         dff_day = dff[dff["Datum"].dt.normalize() == target_day].copy()
         if dff_day.empty:
-            dff_no_na = dff.dropna(subset=["Datum"]).copy()
+            dff_no_na = dff.dropna(subset=["Datum"])
             if not dff_no_na.empty:
                 last_day = dff_no_na["Datum"].dt.normalize().max()
                 target_day = last_day
@@ -117,11 +119,11 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                         },
                     )
             else:
-                return html.Div(tr("no_games_today", lang)), []
+                return html.Div(tr("no_games_today", lang)), [], ""
 
         if "Win Lose" not in dff_day.columns:
             msg = tr("required_cols_missing", lang).format(cols="Win Lose")
-            return html.Div(msg), []
+            return html.Div(msg), [], ""
 
         wl = dff_day["Win Lose"].astype(str).str.lower().str.strip()
         dff_day["_win"] = wl.isin(["win", "victory", "sieg"])
@@ -135,6 +137,21 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         wins = int(dff_day["_win"].sum())
         losses = total_games - wins
         wr = (wins / total_games * 100.0) if total_games else 0.0
+
+        # ── Smart-render fingerprint ────────────────────────────────────
+        # Skip expensive UI building when server-update-token fires but
+        # the data for the selected day hasn't actually changed.
+        _max_mid = ""
+        if "Match ID" in dff_day.columns:
+            _mid_max = dff_day["Match ID"].max()
+            _max_mid = str(_mid_max) if pd.notna(_mid_max) else ""
+        fingerprint = f"{total_games}:{wins}:{_max_mid}"
+        if (
+            ctx.triggered_id == "server-update-token"
+            and prev_fingerprint
+            and fingerprint == prev_fingerprint
+        ):
+            return no_update, no_update, no_update
 
         # ── Prev / next active day ──────────────────────────────────────
         active_days = sorted(
@@ -230,8 +247,21 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         player_rows = _compute_player_rows(dff_day, hero_cols, lang)
 
         if player_rows:
-            # Biggest Flex
-            hero_usage = _compute_hero_usage(dff_day)
+            # Derive hero-usage data directly from player_rows (no redundant
+            # DataFrame filtering).  _compute_hero_usage is eliminated.
+            hero_usage = [
+                {
+                    "player": r["player"],
+                    "distinct": len(r["hero_stats"]),
+                    "top_hero": r["top_hero"],
+                    "top_hero_games": (
+                        r["hero_stats"][0]["games"] if r["hero_stats"] else 0
+                    ),
+                    "total_games": r["games"],
+                }
+                for r in player_rows
+                if r.get("hero_stats")
+            ]
             dfu = (
                 pd.DataFrame(hero_usage)
                 if hero_usage
@@ -247,11 +277,11 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
             )
 
             if not dfu.empty:
-                spotlight_cards.append(_biggest_flex_card(dfu, dff_day, lang))
+                spotlight_cards.append(_biggest_flex_card(dfu, player_rows, lang))
                 spotlight_cards.append(_otp_card(dfu, lang))
 
-            # Hero-Carry
-            carry_card = _hero_carry_card(dff_day, lang)
+            # Hero-Carry — derived from player_rows, no extra filtering
+            carry_card = _hero_carry_card(player_rows, lang)
             if carry_card:
                 spotlight_cards.append(carry_card)
 
@@ -314,7 +344,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
             ),
             timeline,
         ]
-        return summary, content
+        return summary, content, fingerprint
 
     _toggle_hero_breakdown_callback(app)
     _register_nav_callback(app)
@@ -348,7 +378,8 @@ def _find_top_hero(dff_day, hero_cols):
     if not hero_cols:
         return None, None, None
     all_h = pd.concat([dff_day[c].astype(str) for c in hero_cols], ignore_index=True)
-    all_h = all_h[all_h.map(is_valid_hero)]
+    valid = is_valid_hero_series(all_h)
+    all_h = all_h[valid]
     if all_h.empty:
         return None, None, None
     top = all_h.value_counts().idxmax()
@@ -643,7 +674,7 @@ def _compute_player_rows(dff_day, hero_cols, lang):
         hero_stats_list: list[dict] = []
         if hero_col in sub.columns:
             h_vals = sub[hero_col].astype(str)
-            valid_mask = h_vals.map(is_valid_hero)
+            valid_mask = is_valid_hero_series(h_vals)
             h_valid_sub = sub[valid_mask]
             if not h_valid_sub.empty:
                 top_hero_p = h_vals[valid_mask].value_counts().idxmax()
@@ -677,52 +708,14 @@ def _compute_player_rows(dff_day, hero_cols, lang):
     return rows
 
 
-def _compute_hero_usage(dff_day):
-    usage = []
-    for p in config.PLAYERS:
-        rc, hc = f"{p} Rolle", f"{p} Hero"
-        if rc in dff_day.columns and hc in dff_day.columns:
-            subp = dff_day[
-                (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-                & dff_day[hc].notna()
-            ]
-            heroes = subp[hc].astype(str).str.strip()
-            heroes = heroes[heroes.map(is_valid_hero)]
-            if not heroes.empty:
-                counts = heroes.value_counts()
-                usage.append(
-                    {
-                        "player": p,
-                        "distinct": int(counts.shape[0]),
-                        "top_hero": counts.idxmax(),
-                        "top_hero_games": int(counts.max()),
-                        "total_games": int(counts.sum()),
-                    }
-                )
-    return usage
-
-
-def _biggest_flex_card(dfu, dff_day, lang):
+def _biggest_flex_card(dfu, player_rows, lang):
     flex_row = dfu.sort_values(
         ["distinct", "total_games"], ascending=[False, False]
     ).iloc[0]
     fp = flex_row["player"]
-    rc, hc = f"{fp} Rolle", f"{fp} Hero"
-    top3 = []
-    if rc in dff_day.columns and hc in dff_day.columns:
-        sp = dff_day[
-            (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-            & dff_day[hc].notna()
-        ]
-        if not sp.empty:
-            vc = (
-                sp[hc]
-                .astype(str)
-                .str.strip()
-                .pipe(lambda s: s[s.map(is_valid_hero)])
-                .value_counts()
-            )
-            top3 = list(vc.index[:3])
+    # Get top-3 heroes from pre-computed player_rows (no extra filtering)
+    pr = next((r for r in player_rows if r["player"] == fp), None)
+    top3 = [hs["hero"] for hs in (pr["hero_stats"] if pr else [])[:3]]
     avatars = []
     for i, h in enumerate(top3 or []):
         avatars.append(
@@ -829,44 +822,25 @@ def _otp_card(dfu, lang):
     )
 
 
-def _hero_carry_card(dff_day, lang):
+def _hero_carry_card(player_rows, lang):
+    """Find the best player-hero combo from pre-computed *player_rows*."""
     best_combo, best_wr, best_games, best_player, best_hero = None, -1.0, 0, None, None
-    for p in config.PLAYERS:
-        rc, hc = f"{p} Rolle", f"{p} Hero"
-        if rc not in dff_day.columns or hc not in dff_day.columns:
-            continue
-        subp = dff_day[
-            (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-            & dff_day[hc].notna()
-        ]
-        if subp.empty:
-            continue
-        for hero, grp in subp.groupby(subp[hc].astype(str).str.strip()):
-            if not is_valid_hero(hero):
-                continue
-            gn = int(len(grp))
-            wrv = float(grp["_win"].mean() * 100.0) if gn else 0.0
+    for r in player_rows:
+        for hs in r.get("hero_stats") or []:
+            gn = hs["games"]
+            wrv = hs["wr"]
             prefer = gn >= 2
             if best_combo is None:
-                best_combo, best_wr, best_games, best_player, best_hero = (
-                    prefer,
-                    wrv,
-                    gn,
-                    p,
-                    hero,
-                )
+                best_combo, best_wr, best_games = prefer, wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
             elif prefer and not best_combo:
-                best_combo, best_wr, best_games, best_player, best_hero = (
-                    True,
-                    wrv,
-                    gn,
-                    p,
-                    hero,
-                )
+                best_combo, best_wr, best_games = True, wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
             elif prefer == best_combo and (
                 wrv > best_wr or (wrv == best_wr and gn > best_games)
             ):
-                best_wr, best_games, best_player, best_hero = wrv, gn, p, hero
+                best_wr, best_games = wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
     if not best_player or not best_hero:
         return None
     return dbc.Col(
@@ -1185,8 +1159,8 @@ def _register_nav_callback(app) -> None:
 
 def _build_timeline(dff_day, target_day, today, lang):
     """Build the horizontal match-timeline strip."""
-    # Sort newest first
-    dff_day = dff_day.copy()
+    # Sort newest first — work on a lightweight view; dff_day is already
+    # a copy owned by render_daily_report so we can add columns safely.
     dff_day["_dt_sort"] = dff_day["_dt_show"]
     if "Datum" in dff_day.columns:
         na_mask = dff_day["_dt_sort"].isna()
