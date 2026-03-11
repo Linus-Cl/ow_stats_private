@@ -892,7 +892,7 @@
             }
 
             // ============================================================
-            // Map Dropdown (fuzzy search)
+            // Map Dropdown
             // ============================================================
             function setupMapDropdown() {
                 const input = document.getElementById('f-map');
@@ -903,7 +903,7 @@
                 function render(filter = '') {
                     list.innerHTML = '';
                     const f = filter.toLowerCase();
-                    items = (mappings.allMaps || []).filter(m => m.toLowerCase().includes(f));
+                    items = (mappings.allMaps || []).filter(m => m.toLowerCase().startsWith(f));
                     highlighted = items.length > 0 ? 0 : -1;
                     items.forEach((m, i) => {
                         const gm = mappings.mapGamemodeMap[m] || '';
@@ -1138,7 +1138,7 @@
                     function hrender(filter = '') {
                         hlist.innerHTML = '';
                         const f = filter.toLowerCase();
-                        hitems = (mappings.allHeroes || []).filter(h => h.toLowerCase().includes(f));
+                        hitems = (mappings.allHeroes || []).filter(h => h.toLowerCase().startsWith(f));
                         hhl = hitems.length > 0 ? 0 : -1;
                         hitems.forEach((h, i) => {
                             const role = mappings.heroRoleMap[h] || '';
