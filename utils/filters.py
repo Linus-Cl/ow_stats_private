@@ -98,7 +98,16 @@ def calculate_winrate(
 # ---------------------------------------------------------------------------
 
 
+_INVALID_HERO_VALUES = frozenset({"nicht dabei", "none", "nan", ""})
+
+
 def is_valid_hero(x: str) -> bool:
     """Return ``True`` if the value represents a real hero pick (not bench/empty)."""
     s = str(x).strip().lower()
-    return bool(s) and s not in ("nicht dabei", "none", "nan", "")
+    return bool(s) and s not in _INVALID_HERO_VALUES
+
+
+def is_valid_hero_series(s: "pd.Series") -> "pd.Series":
+    """Vectorised version of :func:`is_valid_hero` for a whole Series."""
+    normed = s.astype(str).str.strip().str.lower()
+    return normed.ne("") & ~normed.isin(_INVALID_HERO_VALUES) & s.notna()

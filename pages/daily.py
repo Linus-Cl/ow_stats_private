@@ -8,17 +8,18 @@ player lineup, and a visual match timeline.
 
 from __future__ import annotations
 
+import bisect
 import os
 import re
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, dcc, html, no_update
+from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 import config
 from data import loader
 from utils.assets import get_hero_image_url, get_map_image_url
-from utils.filters import is_valid_hero
+from utils.filters import is_valid_hero, is_valid_hero_series
 from utils.formatting import (
     compose_datetime,
     format_duration_display,
@@ -27,6 +28,7 @@ from utils.formatting import (
     parse_time,
 )
 from utils.i18n import tr
+from utils.funfacts import get_random_fact
 
 
 # ---------------------------------------------------------------------------
@@ -40,21 +42,29 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
     @app.callback(
         Output("daily-summary", "children"),
         Output("daily-report-container", "children"),
+        Output("daily-render-fingerprint", "data"),
         Input("tabs", "active_tab"),
         Input("lang-store", "data"),
         Input("daily-date", "date"),
         Input("server-update-token", "data"),
+        State("hero-collapse-states", "data"),
+        State("daily-render-fingerprint", "data"),
         prevent_initial_call=False,
     )
-    def render_daily_report(active_tab, lang_data, selected_date, _token):
+    def render_daily_report(
+        active_tab, lang_data, selected_date, _token, collapse_states, prev_fingerprint
+    ):
         lang = (lang_data or {}).get("lang", "en")
         if active_tab != "tab-daily":
-            return no_update, no_update
+            return no_update, no_update, no_update
 
-        loader.reload()
+        # Only reload from disk/Firebase when the server signals new data.
+        # Avoids expensive I/O on every tab-switch, date change, or lang toggle.
+        if ctx.triggered_id == "server-update-token":
+            loader.reload()
         df = loader.get_df()
         if df.empty or "Datum" not in df.columns:
-            return html.Div(tr("no_data", lang)), []
+            return html.Div(tr("no_data", lang)), [], ""
 
         dff = df
 
@@ -81,7 +91,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
 
         dff_day = dff[dff["Datum"].dt.normalize() == target_day].copy()
         if dff_day.empty:
-            dff_no_na = dff.dropna(subset=["Datum"]).copy()
+            dff_no_na = dff.dropna(subset=["Datum"])
             if not dff_no_na.empty:
                 last_day = dff_no_na["Datum"].dt.normalize().max()
                 target_day = last_day
@@ -109,11 +119,11 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                         },
                     )
             else:
-                return html.Div(tr("no_games_today", lang)), []
+                return html.Div(tr("no_games_today", lang)), [], ""
 
         if "Win Lose" not in dff_day.columns:
             msg = tr("required_cols_missing", lang).format(cols="Win Lose")
-            return html.Div(msg), []
+            return html.Div(msg), [], ""
 
         wl = dff_day["Win Lose"].astype(str).str.lower().str.strip()
         dff_day["_win"] = wl.isin(["win", "victory", "sieg"])
@@ -127,6 +137,49 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         wins = int(dff_day["_win"].sum())
         losses = total_games - wins
         wr = (wins / total_games * 100.0) if total_games else 0.0
+
+        # ── Smart-render fingerprint ────────────────────────────────────
+        # Skip expensive UI building when server-update-token fires but
+        # the data for the selected day hasn't actually changed.
+        _max_mid = ""
+        if "Match ID" in dff_day.columns:
+            _mid_max = dff_day["Match ID"].max()
+            _max_mid = str(_mid_max) if pd.notna(_mid_max) else ""
+        fingerprint = f"{total_games}:{wins}:{_max_mid}"
+        if (
+            ctx.triggered_id == "server-update-token"
+            and prev_fingerprint
+            and fingerprint == prev_fingerprint
+        ):
+            return no_update, no_update, no_update
+
+        # ── Prev / next active day ──────────────────────────────────────
+        active_days = sorted(
+            dff.dropna(subset=["Datum"])["Datum"].dt.normalize().unique().tolist()
+        )
+        try:
+            cur_idx = bisect.bisect_left(active_days, target_day)
+            # bisect_left finds insertion point; handle exact match
+            if cur_idx < len(active_days) and active_days[cur_idx] == target_day:
+                prev_date = (
+                    active_days[cur_idx - 1].date().isoformat() if cur_idx > 0 else None
+                )
+                next_date = (
+                    active_days[cur_idx + 1].date().isoformat()
+                    if cur_idx < len(active_days) - 1
+                    else None
+                )
+            else:
+                prev_date = (
+                    active_days[cur_idx - 1].date().isoformat() if cur_idx > 0 else None
+                )
+                next_date = (
+                    active_days[cur_idx].date().isoformat()
+                    if cur_idx < len(active_days)
+                    else None
+                )
+        except Exception:
+            prev_date = next_date = None
 
         # ── Top map ────────────────────────────────────────────────────────
         top_map = _find_top_map(dff_day, lang)
@@ -155,6 +208,8 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                     losses,
                     wr,
                     lang,
+                    prev_date=prev_date,
+                    next_date=next_date,
                 )
             )
         else:
@@ -192,8 +247,21 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
         player_rows = _compute_player_rows(dff_day, hero_cols, lang)
 
         if player_rows:
-            # Biggest Flex
-            hero_usage = _compute_hero_usage(dff_day)
+            # Derive hero-usage data directly from player_rows (no redundant
+            # DataFrame filtering).  _compute_hero_usage is eliminated.
+            hero_usage = [
+                {
+                    "player": r["player"],
+                    "distinct": len(r["hero_stats"]),
+                    "top_hero": r["top_hero"],
+                    "top_hero_games": (
+                        r["hero_stats"][0]["games"] if r["hero_stats"] else 0
+                    ),
+                    "total_games": r["games"],
+                }
+                for r in player_rows
+                if r.get("hero_stats")
+            ]
             dfu = (
                 pd.DataFrame(hero_usage)
                 if hero_usage
@@ -209,19 +277,48 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
             )
 
             if not dfu.empty:
-                spotlight_cards.append(_biggest_flex_card(dfu, dff_day, lang))
+                spotlight_cards.append(_biggest_flex_card(dfu, player_rows, lang))
                 spotlight_cards.append(_otp_card(dfu, lang))
 
-            # Hero-Carry
-            carry_card = _hero_carry_card(dff_day, lang)
+            # Hero-Carry — derived from player_rows, no extra filtering
+            carry_card = _hero_carry_card(player_rows, lang)
             if carry_card:
                 spotlight_cards.append(carry_card)
 
         # ── Player lineup ──────────────────────────────────────────────────
-        lineup_cards = _build_lineup_cards(player_rows, lang)
+        lineup_cards = _build_lineup_cards(player_rows, lang, collapse_states or {})
 
         # ── Timeline ───────────────────────────────────────────────────────
         timeline = _build_timeline(dff_day, target_day, today, lang)
+
+        # ── Fun Fact ───────────────────────────────────────────────────────
+        # Seed with the current date so the fact is stable for the whole day
+        # and doesn't change on every data-poll re-render.
+        fun_fact_text = get_random_fact(dff, lang, seed=str(target_day.date()))
+        fun_fact_card = (
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Span(
+                            tr("fun_fact", lang),
+                            className="text-muted me-2",
+                            style={
+                                "fontSize": "0.75rem",
+                                "fontWeight": "600",
+                                "textTransform": "uppercase",
+                                "letterSpacing": "0.05em",
+                            },
+                        ),
+                        html.Span(fun_fact_text, style={"fontSize": "0.9rem"}),
+                    ],
+                    className="py-2 px-3",
+                ),
+                className="mt-3",
+                style={"borderLeft": "3px solid #fa9c1e"},
+            )
+            if fun_fact_text
+            else html.Div()
+        )
 
         # ── Assemble ───────────────────────────────────────────────────────
         summary = banner_children[0]
@@ -231,6 +328,7 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
                 if spotlight_cards
                 else html.Div()
             ),
+            fun_fact_card,
             html.H4(tr("lineup_today", lang), className="mt-4 mb-2"),
             (
                 dbc.Row(lineup_cards, className="g-3")
@@ -246,7 +344,10 @@ def register_callbacks(app) -> None:  # noqa: C901 – faithful 1-to-1 migration
             ),
             timeline,
         ]
-        return summary, content
+        return summary, content, fingerprint
+
+    _toggle_hero_breakdown_callback(app)
+    _register_nav_callback(app)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +378,8 @@ def _find_top_hero(dff_day, hero_cols):
     if not hero_cols:
         return None, None, None
     all_h = pd.concat([dff_day[c].astype(str) for c in hero_cols], ignore_index=True)
-    all_h = all_h[all_h.map(is_valid_hero)]
+    valid = is_valid_hero_series(all_h)
+    all_h = all_h[valid]
     if all_h.empty:
         return None, None, None
     top = all_h.value_counts().idxmax()
@@ -304,8 +406,50 @@ def _build_map_banner(
     losses,
     wr,
     lang,
+    prev_date=None,
+    next_date=None,
 ):
-    return html.Div(
+    def _nav_btn(label, date_iso, btn_id):
+        """Kleiner Navigationsbutton mit Datums-Label."""
+        _base = {
+            "background": "transparent",
+            "border": "1px solid rgba(150,150,150,0.35)",
+            "borderRadius": "6px",
+            "color": "#9ca3af",
+            "padding": "3px 10px",
+            "fontSize": "0.82rem",
+            "lineHeight": "1.4",
+            "cursor": "pointer",
+            "transition": "background 0.15s",
+        }
+        _disabled = {
+            **_base,
+            "opacity": "0.28",
+            "cursor": "default",
+            "pointerEvents": "none",
+        }
+        if date_iso:
+            try:
+                import datetime as _dt
+
+                d = _dt.date.fromisoformat(date_iso)
+                date_label = (
+                    d.strftime("%d.%m.%y") if lang == "de" else d.strftime("%Y-%m-%d")
+                )
+            except Exception:
+                date_label = date_iso
+        else:
+            date_label = ""
+        text = f"{label} {date_label}" if date_label else label
+        return html.Button(
+            text,
+            id=btn_id,
+            n_clicks=0,
+            disabled=not bool(date_iso),
+            style=_base if date_iso else _disabled,
+        )
+
+    banner = html.Div(
         [
             html.Div(
                 [
@@ -415,6 +559,20 @@ def _build_map_banner(
             "boxShadow": "0 8px 24px rgba(0,0,0,0.35)",
         },
     )
+    nav_row = html.Div(
+        [
+            _nav_btn("←", prev_date, "daily-prev-btn"),
+            _nav_btn("→", next_date, "daily-next-btn"),
+        ],
+        style={
+            "display": "flex",
+            "justifyContent": "space-between",
+            "marginTop": "6px",
+            "paddingLeft": "2px",
+            "paddingRight": "2px",
+        },
+    )
+    return html.Div([banner, nav_row])
 
 
 def _hero_spotlight_card(top_hero, top_hero_wr, top_hero_games, lang):
@@ -513,11 +671,26 @@ def _compute_player_rows(dff_day, hero_cols, lang):
 
         hero_col = f"{p} Hero"
         top_hero_p = None
+        hero_stats_list: list[dict] = []
         if hero_col in sub.columns:
-            h = sub[hero_col].dropna().astype(str)
-            h = h[h.map(is_valid_hero)]
-            if not h.empty:
-                top_hero_p = h.value_counts().idxmax()
+            h_vals = sub[hero_col].astype(str)
+            valid_mask = is_valid_hero_series(h_vals)
+            h_valid_sub = sub[valid_mask]
+            if not h_valid_sub.empty:
+                top_hero_p = h_vals[valid_mask].value_counts().idxmax()
+                for hero_name, h_grp in h_valid_sub.groupby(h_vals[valid_mask]):
+                    g = len(h_grp)
+                    w = int(h_grp["_win"].sum())
+                    hero_stats_list.append(
+                        {
+                            "hero": hero_name,
+                            "games": g,
+                            "wins": w,
+                            "losses": g - w,
+                            "wr": round(w / g * 100, 1) if g else 0.0,
+                        }
+                    )
+                hero_stats_list.sort(key=lambda x: x["games"], reverse=True)
 
         rows.append(
             {
@@ -529,57 +702,20 @@ def _compute_player_rows(dff_day, hero_cols, lang):
                 "roles": roles_p,
                 "role_wr": role_wr_map,
                 "top_hero": top_hero_p,
+                "hero_stats": hero_stats_list,
             }
         )
     return rows
 
 
-def _compute_hero_usage(dff_day):
-    usage = []
-    for p in config.PLAYERS:
-        rc, hc = f"{p} Rolle", f"{p} Hero"
-        if rc in dff_day.columns and hc in dff_day.columns:
-            subp = dff_day[
-                (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-                & dff_day[hc].notna()
-            ]
-            heroes = subp[hc].astype(str).str.strip()
-            heroes = heroes[heroes.map(is_valid_hero)]
-            if not heroes.empty:
-                counts = heroes.value_counts()
-                usage.append(
-                    {
-                        "player": p,
-                        "distinct": int(counts.shape[0]),
-                        "top_hero": counts.idxmax(),
-                        "top_hero_games": int(counts.max()),
-                        "total_games": int(counts.sum()),
-                    }
-                )
-    return usage
-
-
-def _biggest_flex_card(dfu, dff_day, lang):
+def _biggest_flex_card(dfu, player_rows, lang):
     flex_row = dfu.sort_values(
         ["distinct", "total_games"], ascending=[False, False]
     ).iloc[0]
     fp = flex_row["player"]
-    rc, hc = f"{fp} Rolle", f"{fp} Hero"
-    top3 = []
-    if rc in dff_day.columns and hc in dff_day.columns:
-        sp = dff_day[
-            (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-            & dff_day[hc].notna()
-        ]
-        if not sp.empty:
-            vc = (
-                sp[hc]
-                .astype(str)
-                .str.strip()
-                .pipe(lambda s: s[s.map(is_valid_hero)])
-                .value_counts()
-            )
-            top3 = list(vc.index[:3])
+    # Get top-3 heroes from pre-computed player_rows (no extra filtering)
+    pr = next((r for r in player_rows if r["player"] == fp), None)
+    top3 = [hs["hero"] for hs in (pr["hero_stats"] if pr else [])[:3]]
     avatars = []
     for i, h in enumerate(top3 or []):
         avatars.append(
@@ -686,44 +822,25 @@ def _otp_card(dfu, lang):
     )
 
 
-def _hero_carry_card(dff_day, lang):
+def _hero_carry_card(player_rows, lang):
+    """Find the best player-hero combo from pre-computed *player_rows*."""
     best_combo, best_wr, best_games, best_player, best_hero = None, -1.0, 0, None, None
-    for p in config.PLAYERS:
-        rc, hc = f"{p} Rolle", f"{p} Hero"
-        if rc not in dff_day.columns or hc not in dff_day.columns:
-            continue
-        subp = dff_day[
-            (dff_day[rc].astype(str).str.strip().str.lower() != "nicht dabei")
-            & dff_day[hc].notna()
-        ]
-        if subp.empty:
-            continue
-        for hero, grp in subp.groupby(subp[hc].astype(str).str.strip()):
-            if not is_valid_hero(hero):
-                continue
-            gn = int(len(grp))
-            wrv = float(grp["_win"].mean() * 100.0) if gn else 0.0
+    for r in player_rows:
+        for hs in r.get("hero_stats") or []:
+            gn = hs["games"]
+            wrv = hs["wr"]
             prefer = gn >= 2
             if best_combo is None:
-                best_combo, best_wr, best_games, best_player, best_hero = (
-                    prefer,
-                    wrv,
-                    gn,
-                    p,
-                    hero,
-                )
+                best_combo, best_wr, best_games = prefer, wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
             elif prefer and not best_combo:
-                best_combo, best_wr, best_games, best_player, best_hero = (
-                    True,
-                    wrv,
-                    gn,
-                    p,
-                    hero,
-                )
+                best_combo, best_wr, best_games = True, wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
             elif prefer == best_combo and (
                 wrv > best_wr or (wrv == best_wr and gn > best_games)
             ):
-                best_wr, best_games, best_player, best_hero = wrv, gn, p, hero
+                best_wr, best_games = wrv, gn
+                best_player, best_hero = r["player"], hs["hero"]
     if not best_player or not best_hero:
         return None
     return dbc.Col(
@@ -766,7 +883,7 @@ def _hero_carry_card(dff_day, lang):
     )
 
 
-def _build_lineup_cards(player_rows, lang):
+def _build_lineup_cards(player_rows, lang, collapse_states: dict | None = None):
     role_color = {"Tank": "warning", "Damage": "danger", "Support": "success"}
     cards = []
     for r in player_rows:
@@ -807,39 +924,121 @@ def _build_lineup_cards(player_rows, lang):
                 for role in r["roles"]
             ]
 
+        # ── Hero breakdown (collapsible) ─────────────────────────────────────
+        hero_stats = r.get("hero_stats") or []
+        hero_rows_ui = []
+        for hs in hero_stats:
+            wr_c = (
+                "#4caf50" if hs["wr"] >= 56 else "#ef5350" if hs["wr"] < 44 else "#888"
+            )
+            hero_rows_ui.append(
+                html.Div(
+                    [
+                        html.Img(
+                            src=get_hero_image_url(hs["hero"]),
+                            style={
+                                "width": "26px",
+                                "height": "26px",
+                                "borderRadius": "50%",
+                                "objectFit": "cover",
+                                "flexShrink": "0",
+                            },
+                        ),
+                        html.Span(
+                            hs["hero"],
+                            style={
+                                "flex": "1",
+                                "fontSize": "0.82rem",
+                                "paddingLeft": "8px",
+                            },
+                        ),
+                        html.Span(
+                            f"{hs['wins']}W\u2013{hs['losses']}L",
+                            style={
+                                "fontSize": "0.78rem",
+                                "color": wr_c,
+                                "minWidth": "52px",
+                                "textAlign": "right",
+                                "fontVariantNumeric": "tabular-nums",
+                            },
+                        ),
+                        html.Span(
+                            f"{hs['wr']:.0f}%",
+                            style={
+                                "fontSize": "0.78rem",
+                                "color": wr_c,
+                                "minWidth": "34px",
+                                "textAlign": "right",
+                                "paddingLeft": "6px",
+                                "fontVariantNumeric": "tabular-nums",
+                            },
+                        ),
+                    ],
+                    className="d-flex align-items-center py-1",
+                    style={"borderBottom": "1px solid rgba(128,128,128,0.1)"},
+                )
+            )
+
+        collapse_section = html.Div()
+        if hero_stats:
+            collapse_id = {"type": "hero-collapse", "player": r["player"]}
+            toggle_id = {"type": "hero-toggle", "player": r["player"]}
+            collapse_section = html.Div(
+                [
+                    html.Hr(className="my-2", style={"opacity": "0.15"}),
+                    dbc.Button(
+                        tr("hero_breakdown", lang),
+                        id=toggle_id,
+                        color="link",
+                        size="sm",
+                        className="p-0 text-muted",
+                        style={"textDecoration": "none", "fontSize": "0.78rem"},
+                        n_clicks=0,
+                    ),
+                    dbc.Collapse(
+                        html.Div(hero_rows_ui, className="mt-2"),
+                        id=collapse_id,
+                        is_open=bool((collapse_states or {}).get(r["player"], False)),
+                    ),
+                ]
+            )
+
         cards.append(
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
-                        html.Div(
-                            [
-                                html.Img(
-                                    src=(
-                                        get_hero_image_url(r["top_hero"])
-                                        if r.get("top_hero")
-                                        else "/assets/heroes/default_hero.png"
-                                    ),
-                                    style={
-                                        "width": "54px",
-                                        "height": "54px",
-                                        "borderRadius": "50%",
-                                        "objectFit": "cover",
-                                        "marginRight": "12px",
-                                    },
-                                ),
-                                html.Div(
-                                    [
-                                        html.Div(html.Strong(r["player"])),
-                                        html.Div(badges, className="mb-1"),
-                                        html.Small(
-                                            f"{tr('games', lang)}: {r['games']} • {r['wins']}-{r['losses']} • {tr('winrate', lang)} {r['wr']:.1f}%",
-                                            className="text-muted",
+                        [
+                            html.Div(
+                                [
+                                    html.Img(
+                                        src=(
+                                            get_hero_image_url(r["top_hero"])
+                                            if r.get("top_hero")
+                                            else "/assets/heroes/default_hero.png"
                                         ),
-                                    ]
-                                ),
-                            ],
-                            className="d-flex align-items-center",
-                        )
+                                        style={
+                                            "width": "54px",
+                                            "height": "54px",
+                                            "borderRadius": "50%",
+                                            "objectFit": "cover",
+                                            "marginRight": "12px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(html.Strong(r["player"])),
+                                            html.Div(badges, className="mb-1"),
+                                            html.Small(
+                                                f"{tr('games', lang)}: {r['games']} \u2022 {r['wins']}-{r['losses']} \u2022 {tr('winrate', lang)} {r['wr']:.1f}%",
+                                                className="text-muted",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="d-flex align-items-center",
+                            ),
+                            collapse_section,
+                        ]
                     )
                 ),
                 md=4,
@@ -848,10 +1047,120 @@ def _build_lineup_cards(player_rows, lang):
     return cards
 
 
+def _toggle_hero_breakdown_callback(app) -> None:
+    """Persist hero-breakdown open/close state in a Store AND directly
+    toggle the Collapse ``is_open`` property so the user sees an immediate
+    response.
+
+    Because ``render_daily_report`` recreates every Collapse from scratch on
+    each server-update-token tick (~5 s), we need *both* mechanisms:
+
+    1. **Store** – survives re-renders.  ``render_daily_report`` reads it as a
+       ``State`` and passes it to ``_build_lineup_cards`` which sets the
+       initial ``is_open`` on newly created Collapse components.
+    2. **Direct Output to Collapse.is_open** – gives the user instant visual
+       feedback on click *and* restores the stored open/close state whenever
+       Dash fires this callback because the pattern-matched components were
+       recreated (all ``n_clicks`` == 0).
+    """
+
+    @app.callback(
+        Output("hero-collapse-states", "data"),
+        Output({"type": "hero-collapse", "player": ALL}, "is_open"),
+        Input({"type": "hero-toggle", "player": ALL}, "n_clicks"),
+        State("hero-collapse-states", "data"),
+        prevent_initial_call=True,
+    )
+    def _toggle(all_clicks, states):
+        states = dict(states or {})
+        triggered = ctx.triggered_id
+
+        # --- Real click: toggle the state for the clicked player -----------
+        is_real_click = (
+            triggered is not None
+            and isinstance(triggered, dict)
+            and any(c for c in (all_clicks or []) if c)
+        )
+
+        if is_real_click:
+            player = triggered["player"]
+            states[player] = not states.get(player, False)
+
+        # --- Build is_open list for every currently rendered Collapse ------
+        inputs_list = ctx.inputs_list[0]  # list of dicts with "id" keys
+        is_open_values = [
+            states.get(item["id"]["player"], False) for item in inputs_list
+        ]
+
+        if is_real_click:
+            return states, is_open_values
+
+        # Component recreation (server update, tab switch, etc.):
+        # Don't write back to the store (nothing changed), but DO push the
+        # stored is_open values into the freshly created Collapse components
+        # so they stay in sync with the persisted state.
+        return no_update, is_open_values
+
+
+def _register_nav_callback(app) -> None:
+    """Prev / next day navigation via the arrow buttons in the banner."""
+
+    @app.callback(
+        Output("daily-date", "date", allow_duplicate=True),
+        Input("daily-prev-btn", "n_clicks"),
+        Input("daily-next-btn", "n_clicks"),
+        State("daily-date", "date"),
+        prevent_initial_call=True,
+    )
+    def _nav(prev_clicks, next_clicks, current_date):
+        triggered = ctx.triggered_id
+        if triggered not in ("daily-prev-btn", "daily-next-btn"):
+            return no_update
+        # Guard: ignore re-mount events where n_clicks is 0/None (button was
+        # recreated by the data-refresh render, not actually clicked).
+        clicks = prev_clicks if triggered == "daily-prev-btn" else next_clicks
+        if not clicks:
+            return no_update
+
+        df = loader.get_df()
+        if df.empty or "Datum" not in df.columns:
+            return no_update
+
+        active_days = sorted(
+            df.dropna(subset=["Datum"])["Datum"].dt.normalize().unique().tolist()
+        )
+        if not active_days:
+            return no_update
+
+        try:
+            if current_date:
+                target = pd.to_datetime(current_date).normalize()
+            else:
+                target = active_days[-1]
+
+            idx = bisect.bisect_left(active_days, target)
+            if idx < len(active_days) and active_days[idx] == target:
+                if triggered == "daily-prev-btn":
+                    if idx > 0:
+                        return active_days[idx - 1].date().isoformat()
+                else:
+                    if idx < len(active_days) - 1:
+                        return active_days[idx + 1].date().isoformat()
+            else:
+                # Edge case: current date has no games, snap to nearest
+                if triggered == "daily-prev-btn" and idx > 0:
+                    return active_days[idx - 1].date().isoformat()
+                elif triggered == "daily-next-btn" and idx < len(active_days):
+                    return active_days[idx].date().isoformat()
+        except Exception:
+            pass
+        return no_update
+
+
 def _build_timeline(dff_day, target_day, today, lang):
     """Build the horizontal match-timeline strip."""
-    # Sort newest first
-    dff_day = dff_day.copy()
+    # Sort newest first — work on a lightweight view; dff_day is already
+    # a copy owned by render_daily_report so we can add columns safely.
     dff_day["_dt_sort"] = dff_day["_dt_show"]
     if "Datum" in dff_day.columns:
         na_mask = dff_day["_dt_sort"].isna()

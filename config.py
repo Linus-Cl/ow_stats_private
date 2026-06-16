@@ -20,7 +20,7 @@ LOCAL_DATA_FILE: str = "local_data.jsonl"
 # ── Server / Render ────────────────────────────────────────────────────────
 STATIC_CACHE_TTL: int = 86400  # seconds (1 day) for static assets
 SELF_PING_INTERVAL: int = 9 * 60  # seconds – keeps Render Free Tier awake
-POLL_UPDATE_SECONDS: int = int(os.environ.get("POLL_UPDATE_SECONDS", "5"))
+POLL_UPDATE_SECONDS: int = int(os.environ.get("POLL_UPDATE_SECONDS", "15"))
 ONLINE_ACTIVE_WINDOW: int = int(os.environ.get("ONLINE_ACTIVE_WINDOW_SECONDS", "20"))
 
 # ── Firebase fallback season ──────────────────────────────────────────────

@@ -125,6 +125,24 @@ _HERO_NORM: dict[str, str] = {
     "esperança": "Esperança",
 }
 
+_MAP_NORM: dict[str, str] = {
+    "kings row": "King's Row",
+    "king's row": "King's Row",
+    "paraiso": "Paraíso",
+    "paraíso": "Paraíso",
+    "esperanca": "Esperança",
+    "esperança": "Esperança",
+    "illios": "Ilios",
+    "watchpoint gibralta": "Watchpoint Gibraltar",
+}
+
+
+def _norm_map(name: str) -> str:
+    """Return the canonical display name for a map (case-insensitive lookup)."""
+    if not isinstance(name, str):
+        return name
+    return _MAP_NORM.get(name.strip().lower(), name.strip())
+
 
 def _norm_hero(name: str) -> str:
     """Return the canonical display name for a hero (case-insensitive lookup)."""
@@ -143,7 +161,7 @@ def _matches_to_df(fb_matches: list[dict]) -> pd.DataFrame:
         row: dict = {
             "Match ID": m.get("match_id"),
             "Win Lose": m.get("result"),
-            "Map": m.get("map"),
+            "Map": _norm_map(m.get("map")),
             "Gamemode": m.get("gamemode"),
             "Attack Def": m.get("attack_defense"),
             "Datum": m.get("date"),
