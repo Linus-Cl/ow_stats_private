@@ -170,6 +170,7 @@ MAP_GAMEMODE_MAP: dict[str, str] = {
     "Numbani": "Hybrid",
     "Paraiso": "Hybrid",
     "Paraíso": "Hybrid",
+    "Neon Junction": "Hybrid",
     # Control
     "Antarctic Peninsula": "Control",
     "Busan": "Control",
@@ -218,6 +219,7 @@ ALL_MAPS: list[str] = sorted(
             "King's Row",
             "Lijiang Tower",
             "Midtown",
+            "Neon Junction",
             "Nepal",
             "New Junk City",
             "New Queen Street",
