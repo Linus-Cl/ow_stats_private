@@ -124,6 +124,7 @@ ALL_HEROES: list[str] = sorted(
             "Reaper",
             "Reinhardt",
             "Roadhog",
+            "Shion",
             "Sigma",
             "Sojourn",
             "Soldier 76",
