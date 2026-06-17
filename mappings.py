@@ -126,6 +126,7 @@ ALL_HEROES: list[str] = sorted(
             "Roadhog",
             "Shion",
             "Sigma",
+            "Sierra",
             "Sojourn",
             "Soldier 76",
             "Sombra",
