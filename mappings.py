@@ -10,6 +10,8 @@ HERO_ROLE_MAP: dict[str, str] = {
     # --- Tank ---
     "D.Va": "Tank",
     "Dva": "Tank",
+    "Dmon": "Tank",
+    "D.Mon": "Tank",
     "Doomfist": "Tank",
     "Hazard": "Tank",
     "Junkerqueen": "Tank",
@@ -97,6 +99,7 @@ ALL_HEROES: list[str] = sorted(
             "Brigitte",
             "Cassidy",
             "D.Va",
+            "D.Mon",
             "Domina",
             "Doomfist",
             "Echo",
