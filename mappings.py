@@ -166,6 +166,7 @@ MAP_GAMEMODE_MAP: dict[str, str] = {
     "Shambali Monastery": "Escort",
     "Watchpoint Gibraltar": "Escort",
     "Watchpoint Gibralta": "Escort",  # typo in data
+    "Watchpoint Grimsvötn": "Escort",
     # Hybrid
     "Blizzard World": "Hybrid",
     "Eichenwalde": "Hybrid",
@@ -240,6 +241,7 @@ ALL_MAPS: list[str] = sorted(
             "Suravasa",
             "Throne of Anubis",
             "Watchpoint Gibraltar",
+            "Watchpoint Grimsvötn",
             "Aatlis",
         ]
     )
