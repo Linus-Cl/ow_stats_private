@@ -287,7 +287,7 @@ def get_attack_def_for_gamemode(gamemode: str) -> str | None:
 # ============================================================
 # All Seasons (for dropdown)
 # ============================================================
-ALL_SEASONS: list[str] = [f"Season {i}" for i in range(10, 25)]  # extend as needed
+ALL_SEASONS: list[str] = [f"Season {i}" for i in range(10, 35)]  # extend as needed
 
 
 # ============================================================
