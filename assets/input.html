@@ -1325,7 +1325,7 @@
             // ============================================================
             async function loadHistory() {
                 try {
-                    const resp = await fetch('/api/matches?limit=20', {
+                    const resp = await fetch('/api/matches?limit=200', {
                         headers: { 'X-Input-Pin': PIN }
                     });
                     if (!resp.ok) return;

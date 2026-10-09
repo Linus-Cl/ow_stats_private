@@ -71,6 +71,7 @@ HERO_ROLE_MAP: dict[str, str] = {
     "Mercy": "Support",
     "Mizuki": "Support",
     "Moira": "Support",
+    "Sombra (Support)": "Support",
     "Zenyatta": "Support",
     "Zen": "Support",
 }
@@ -135,6 +136,7 @@ ALL_HEROES: list[str] = sorted(
             "Sojourn",
             "Soldier 76",
             "Sombra",
+            "Sombra (Support)",
             "Symmetra",
             "Torbjörn",
             "Tracer",
@@ -166,7 +168,7 @@ MAP_GAMEMODE_MAP: dict[str, str] = {
     "Shambali Monastery": "Escort",
     "Watchpoint Gibraltar": "Escort",
     "Watchpoint Gibralta": "Escort",  # typo in data
-    "Watchpoint Grimsvötn": "Escort",
+    "Grimsvötn": "Escort",
     # Hybrid
     "Blizzard World": "Hybrid",
     "Eichenwalde": "Hybrid",
@@ -241,7 +243,7 @@ ALL_MAPS: list[str] = sorted(
             "Suravasa",
             "Throne of Anubis",
             "Watchpoint Gibraltar",
-            "Watchpoint Grimsvötn",
+            "Grimsvötn",
             "Aatlis",
         ]
     )
